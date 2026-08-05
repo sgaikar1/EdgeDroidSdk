@@ -1,0 +1,4 @@
+[submodule "runtime-llama/src/main/cpp/llama.cpp"]
+	path = runtime-llama/src/main/cpp/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp.git
+	branch = b10285
