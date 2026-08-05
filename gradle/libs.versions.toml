@@ -1,6 +1,6 @@
 [versions]
 agp = "8.13.0"
-kotlin = "2.0.21"
+kotlin = "2.1.21"
 coreKtx = "1.13.1"
 junit = "4.13.2"
 junitVersion = "1.2.1"
@@ -11,7 +11,9 @@ composeBom = "2024.09.00"
 coroutines = "1.9.0"
 okhttp = "4.12.0"
 kotlinxSerialization = "1.7.3"
-serializationPlugin = "2.0.21"
+serializationPlugin = "2.1.21"
+vanniktech = "0.31.0"
+dokka = "2.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,3 +42,4 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "serializationPlugin" }
+maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "vanniktech" }
