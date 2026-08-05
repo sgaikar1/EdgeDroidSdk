@@ -4,7 +4,6 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.maven.publish)
-    id("signing")
 }
 
 android {
@@ -34,6 +33,7 @@ dependencies {
 
 mavenPublishing {
     configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = false))
+    signAllPublications()
     publishToMavenCentral(host = com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
     coordinates("io.github.sgaikar1", project.name, "0.1.0")
     pom {
@@ -62,14 +62,6 @@ mavenPublishing {
         issueManagement {
             url.set("https://github.com/sgaikar1/EdgeDroidSdk/issues")
         }
-    }
-}
-
-val signingKey = providers.gradleProperty("SIGNING_KEY").orNull ?: System.getenv("SIGNING_KEY")
-val signingPassword = providers.gradleProperty("SIGNING_PASSWORD").orNull ?: System.getenv("SIGNING_PASSWORD")
-if (signingKey != null && signingPassword != null) {
-    signing {
-        useInMemoryPgpKeys(signingKey, signingPassword)
     }
 }
 
