@@ -12,6 +12,10 @@ interface RuntimePlugin {
     val supportedFormats: Set<ModelFormat>
     val capabilities: Set<Capability>
 
+    /** Native ABIs the packaged runtime ships (e.g. "arm64-v8a", "x86_64"). Empty = unknown. */
+    val supportedAbis: Set<String>
+        get() = emptySet()
+
     suspend fun create(config: RuntimeConfig): Runtime
 
     companion object {

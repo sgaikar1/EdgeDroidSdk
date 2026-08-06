@@ -20,11 +20,7 @@ object RuntimeSelector {
         model: Model,
         config: RuntimeConfig,
     ): SdkResult<Runtime> {
-        val plugin: RuntimePlugin? = when (spec) {
-            is RuntimeSpec.Auto -> registry.find(model.format)
-            is RuntimeSpec.ById -> registry.byId(spec.pluginId)
-            is RuntimeSpec.ByPlugin -> spec.plugin
-        }
+        val plugin: RuntimePlugin? = registry.resolve(spec, model.format)
 
         return if (plugin == null) {
             SdkResult.Failure(

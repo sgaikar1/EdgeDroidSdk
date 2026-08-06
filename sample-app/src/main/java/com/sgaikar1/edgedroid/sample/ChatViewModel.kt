@@ -35,9 +35,23 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _compatibility = MutableStateFlow<String?>(null)
+    val compatibility: StateFlow<String?> = _compatibility.asStateFlow()
+
     val engineState: StateFlow<LlmEngineState> = sdk.state
 
     private var generationJob: Job? = null
+
+    fun checkCompatibility() {
+        val report = sdk.models.checkCompatibility()
+        val text = buildList {
+            report.errors.forEach { add("ERROR: ${it.message}") }
+            report.warnings.forEach { add("WARN: ${it.message}") }
+        }.joinToString("\n")
+        _compatibility.value = text.ifEmpty {
+            "Compatible — downloadable: ${report.isDownloadable}, loadable: ${report.isLoadable}"
+        }
+    }
 
     fun downloadModel() {
         viewModelScope.launch {

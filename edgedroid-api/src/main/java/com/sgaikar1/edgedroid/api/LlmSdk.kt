@@ -19,8 +19,13 @@ import com.sgaikar1.edgedroid.download.DownloadConfig
 import com.sgaikar1.edgedroid.download.DownloadManager
 import com.sgaikar1.edgedroid.storage.ModelStorageImpl
 import com.sgaikar1.edgedroid.storage.StoragePaths
+import com.sgaikar1.edgedroid.api.internal.AndroidDeviceCapabilities
+import com.sgaikar1.edgedroid.api.internal.DefaultCompatibilityChecker
 import com.sgaikar1.edgedroid.api.internal.InternalModelProvider
 import com.sgaikar1.edgedroid.api.internal.SdkEngine
+import com.sgaikar1.edgedroid.core.Capability
+import com.sgaikar1.edgedroid.core.CompatibilityChecker
+import com.sgaikar1.edgedroid.core.CompatibilityReport
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -34,6 +39,7 @@ class LlmSdk private constructor(
     private val engine: SdkEngine,
     private val provider: ModelProvider,
     private val registry: RuntimeRegistry,
+    private val compatibilityChecker: CompatibilityChecker,
     private val log: LogProvider,
 ) {
 
@@ -133,6 +139,17 @@ class LlmSdk private constructor(
             engine.unload()
             provider.delete(modelId)
         }
+
+        /**
+         * Check whether this device can download and run the given model before committing
+         * to a (potentially large) download. Hard errors mean it will fail; warnings are
+         * advisory (slow/unsupported-but-may-work). Safe to call on the main thread.
+         */
+        fun checkCompatibility(
+            model: Model = engine.currentModel
+                ?: throw IllegalStateException("No model configured — pass .model(...) to the builder"),
+            requiredCapabilities: Set<Capability> = emptySet(),
+        ): CompatibilityReport = compatibilityChecker.check(model, requiredCapabilities)
     }
 
     class Builder(context: Context) {
@@ -161,12 +178,21 @@ class LlmSdk private constructor(
             val spec = runtimeSpec
             val paths = StoragePaths(appContext)
             val storage = ModelStorageImpl(paths, log)
-            val downloader = DownloadManager(storage, downloadConfig.build(), log)
 
             val registry = RuntimeRegistry(log)
             plugins.forEach { registry.register(it) }
             if (spec is RuntimeSpec.ByPlugin) {
                 registry.register(spec.plugin)
+            }
+
+            val deviceCapabilities = AndroidDeviceCapabilities(appContext).get()
+            val checker = DefaultCompatibilityChecker(deviceCapabilities, storage, registry, spec, log)
+
+            // Fail fast before touching the network if the download cannot possibly succeed.
+            val downloader = DownloadManager(storage, downloadConfig.build(), log) { model ->
+                checker.check(model).errors.firstOrNull()?.let {
+                    ModelDownloadState.Failed(kind = it.code, message = it.message)
+                }
             }
 
             val provider = InternalModelProvider(storage, downloader, log)
@@ -190,11 +216,14 @@ class LlmSdk private constructor(
                         is SdkResult.Failure -> throw RuntimeException(result.message)
                     }
                 },
+                compatibilityGate = { m ->
+                    checker.check(m).errors.firstOrNull()?.message
+                },
                 log = log,
             )
 
             log.log(LogProvider.Level.INFO, "EdgeDroid", "EdgeDroid SDK built")
-            return LlmSdk(engine, provider, registry, log)
+            return LlmSdk(engine, provider, registry, checker, log)
         }
     }
 

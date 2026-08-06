@@ -16,6 +16,7 @@ class LlamaPlugin : RuntimePlugin {
     override val version: String = "0.1.0"
     override val supportedFormats: Set<ModelFormat> = setOf(ModelFormat.GGUF)
     override val capabilities: Set<Capability> = setOf(Capability.STREAMING)
+    override val supportedAbis: Set<String> = setOf("arm64-v8a", "x86_64")
 
     override suspend fun create(config: RuntimeConfig): Runtime = LlamaRuntime(config)
 }

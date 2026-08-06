@@ -31,6 +31,7 @@ class DownloadManager(
     private val storage: ModelStorage,
     private val config: DownloadConfig = DownloadConfig.DEFAULT,
     private val log: LogProvider = LogProvider.NO_OP,
+    private val preflight: (Model) -> ModelDownloadState.Failed? = { null },
 ) : Downloader {
 
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -97,6 +98,12 @@ class DownloadManager(
             val url = model.downloadUrl
             if (url.isNullOrBlank()) {
                 state.value = ModelDownloadState.Failed("config", "model has no downloadUrl")
+                return
+            }
+
+            preflight(model)?.let {
+                state.value = it
+                log.log(LogProvider.Level.WARN, TAG, "Download refused by preflight: ${it.message}")
                 return
             }
 

@@ -24,6 +24,7 @@ internal class SdkEngine(
     private val config: RuntimeConfig,
     private val createRuntime: suspend () -> Runtime,
     private val log: LogProvider,
+    private val compatibilityGate: (Model) -> String? = { null },
     private val processor: PromptProcessor = DefaultPromptProcessor(),
 ) : LlmEngine {
 
@@ -70,6 +71,9 @@ internal class SdkEngine(
         _state.value = LlmEngineState.Loading
         try {
             localPath = provider.getLocalPath(model)
+            compatibilityGate(model)?.let { message ->
+                throw RuntimeException("Model cannot be loaded on this device: $message")
+            }
             val runtime = createRuntime()
             runtime.initialize()
             val resolvedModel = model.copy(

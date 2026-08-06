@@ -65,6 +65,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     var input by remember { mutableStateOf("") }
@@ -106,8 +107,22 @@ fun ChatScreen(viewModel: ChatViewModel) {
             Button(onClick = { viewModel.loadModel() }, enabled = !isLoading) {
                 Text(if (isLoading) "Loading…" else "Load")
             }
+            TextButton(onClick = { viewModel.checkCompatibility() }) { Text("Check") }
             TextButton(onClick = { viewModel.stop() }) { Text("Stop") }
             TextButton(onClick = { viewModel.clear() }) { Text("Clear") }
+        }
+
+        compatibility?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (it.startsWith("ERROR") || it.contains("ERROR:")) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
         }
 
         progress?.let {

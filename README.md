@@ -93,6 +93,36 @@ sdk.stream("Summarize this text") { token ->
 | `.logging(provider)` | Plug in your logger via the `LogProvider` fun interface |
 | `.registerRuntime(plugin)` | Register an additional runtime before building |
 
+## Checking device compatibility before downloading
+
+Ask the SDK whether this device can actually run the model **before** committing to a
+large download:
+
+```kotlin
+val report: CompatibilityReport = sdk.models.checkCompatibility()
+
+if (report.isDownloadable) {
+    sdk.models.download()   // proceed
+} else {
+    report.errors.forEach { showError(it.message) }   // e.g. "Not enough storage: need 1.2 GB, have 400 MB free."
+}
+```
+
+What is checked:
+
+| Check | Severity | Blocks? |
+| --- | --- | --- |
+| Free storage >= model size + 256 MB headroom | `ERROR` | Yes — download is refused before any network request |
+| A registered runtime supports the model format/capabilities | `ERROR` | Yes |
+| Model file present or has a `downloadUrl` | `ERROR` | Yes (load) |
+| Model large relative to device RAM | `WARNING` | No |
+| Runtime native ABI missing from `Build.SUPPORTED_ABIS` | `WARNING` | No |
+| CPU core count | `INFO` | No |
+
+The same check runs automatically again right before `load()` (hard errors throw a clear
+message instead of a late native crash), and `download()` fails fast with
+`ModelDownloadState.Failed(kind = "compatibility", …)` if it can never succeed.
+
 ## Downloading with progress
 
 `download()` returns a cold `Flow<ModelDownloadState>` that already runs the download;

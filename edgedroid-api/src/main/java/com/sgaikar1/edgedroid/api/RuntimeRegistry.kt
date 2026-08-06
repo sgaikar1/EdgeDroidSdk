@@ -43,6 +43,21 @@ class RuntimeRegistry(private val log: LogProvider = LogProvider.NO_OP) {
     @Synchronized
     fun all(): List<RuntimePlugin> = plugins.values.toList()
 
+    /**
+     * Pick the plugin a [RuntimeSpec] resolves to, without creating a runtime. Shared by
+     * [RuntimeSelector] and the compatibility checker so both agree on the selection.
+     */
+    @Synchronized
+    fun resolve(
+        spec: RuntimeSpec,
+        format: ModelFormat,
+        capabilities: Set<Capability> = emptySet(),
+    ): RuntimePlugin? = when (spec) {
+        is RuntimeSpec.Auto -> find(format, capabilities)
+        is RuntimeSpec.ById -> byId(spec.pluginId)
+        is RuntimeSpec.ByPlugin -> spec.plugin
+    }
+
     @Synchronized
     fun contains(id: String): Boolean = plugins.containsKey(id)
 
