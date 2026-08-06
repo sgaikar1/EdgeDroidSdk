@@ -22,6 +22,7 @@
 struct LlamaSession {
     llama_model* model = nullptr;
     llama_context* ctx = nullptr;
+    int32_t n_batch = 256;
     std::atomic<bool> stop{false};
 };
 
@@ -95,6 +96,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
     auto* session = new LlamaSession();
     session->model = model;
     session->ctx = ctx;
+    session->n_batch = nBatch > 0 ? nBatch : 256;
 
     jlong handle = reinterpret_cast<jlong>(session);
     register_session(handle, session);
@@ -152,8 +154,30 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     if (n_tok < 0) n_tok = 0;
     tokens.resize(n_tok);
 
-    if (!tokens.empty()) {
-        llama_batch batch = llama_batch_get_one(tokens.data(), (int32_t) tokens.size());
+    // Guard: the prompt (plus generated tokens) must fit the context window.
+    // Context overflow is graceful inside llama.cpp, but would truncate the answer,
+    // so surface it to the caller instead.
+    if (n_tok > 0) {
+        const int32_t room = (int32_t) llama_n_ctx(s->ctx) - maxTokens - 1;
+        if (room <= 0) {
+            jni_throw(env, "context window too small for the requested maxTokens");
+            return;
+        }
+        if (n_tok > room) {
+            jni_throw(env, ("prompt of " + std::to_string(n_tok) +
+                            " tokens exceeds the context window (n_ctx=" +
+                            std::to_string((int32_t) llama_n_ctx(s->ctx)) +
+                            ", maxTokens=" + std::to_string(maxTokens) + ")").c_str());
+            return;
+        }
+    }
+
+    // Encode the prompt in n_batch-sized chunks. llama_decode hard-asserts (SIGABRT)
+    // when a single batch exceeds cparams.n_batch, so never pass more than n_batch
+    // tokens per call. Positions are tracked automatically for get_one batches.
+    for (int32_t off = 0; off < n_tok; off += s->n_batch) {
+        const int32_t n = std::min(s->n_batch, n_tok - off);
+        llama_batch batch = llama_batch_get_one(tokens.data() + off, n);
         if (llama_decode(s->ctx, batch) != 0) {
             jni_throw(env, "prompt decoding failed");
             return;
