@@ -13,6 +13,7 @@ android {
 
     defaultConfig {
         minSdk = 26
+        buildConfigField("String", "SDK_VERSION", "\"${libs.versions.sdkVersion.get()}\"")
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
@@ -69,7 +70,7 @@ mavenPublishing {
     configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = false))
     signAllPublications()
     publishToMavenCentral(host = com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
-    coordinates("io.github.sgaikar1", project.name, "0.1.0")
+    coordinates("io.github.sgaikar1", project.name, libs.versions.sdkVersion.get())
     pom {
         name.set("EdgeDroid ${project.name}")
         description.set("EdgeDroid: on-device LLM SDK for Android - ${project.name} module")

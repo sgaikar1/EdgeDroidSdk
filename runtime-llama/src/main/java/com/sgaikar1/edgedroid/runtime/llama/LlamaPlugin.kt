@@ -13,7 +13,7 @@ import com.sgaikar1.edgedroid.core.RuntimePlugin
 class LlamaPlugin : RuntimePlugin {
 
     override val id: String = "llama"
-    override val version: String = "0.1.0"
+    override val version: String = BuildConfig.SDK_VERSION
     override val supportedFormats: Set<ModelFormat> = setOf(ModelFormat.GGUF)
     override val capabilities: Set<Capability> = setOf(Capability.STREAMING)
     override val supportedAbis: Set<String> = setOf("arm64-v8a", "x86_64")
