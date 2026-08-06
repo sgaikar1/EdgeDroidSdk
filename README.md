@@ -20,7 +20,7 @@ The SDK owns **everything except inference**: downloads, storage, runtime select
 prompt rendering, threading, model formats. Developers never touch JNI, GGUF, paths, or
 runtime initialization.
 
-Published on **Maven Central** as `io.github.sgaikar1` (version `0.2.0`). SDK Kotlin footprint
+Published on **Maven Central** as `io.github.sgaikar1` (version `0.3.0`). SDK Kotlin footprint
 is ~170 KB; the llama.cpp AAR is ~3.9 MB (arm64 + x86_64).
 
 ## Installation
@@ -41,8 +41,8 @@ dependencyResolutionManagement {
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("io.github.sgaikar1:edgedroid-api:0.2.0")
-    implementation("io.github.sgaikar1:runtime-llama:0.2.0") // or any other runtime plugin
+    implementation("io.github.sgaikar1:edgedroid-api:0.3.0")
+    implementation("io.github.sgaikar1:runtime-llama:0.3.0") // or any other runtime plugin
 }
 ```
 
@@ -168,6 +168,66 @@ Stop an in-flight generation:
 ```kotlin
 sdk.stop()
 ```
+
+## Error handling
+
+The SDK fails fast with explicit, catchable errors — never with native crashes.
+
+**Context window exceeded** (`0.3.0+`). If a rendered prompt (system prompt + history +
+your message) plus the requested `maxTokens` exceeds the configured `contextSize`, generation
+throws a `RuntimeException`:
+
+```
+prompt of 812 tokens exceeds the context window (n_ctx=2048, maxTokens=256)
+```
+
+Handle it by trimming the conversation and retrying:
+
+```kotlin
+try {
+    sdk.stream("Summarize this") { token -> /* … */ }
+} catch (e: RuntimeException) {
+    if (e.message?.contains("context window") == true) {
+        sdk.resetChat()                 // clear history (and system prompt)
+        sdk.systemPrompt = SHORT_PROMPT // optionally re-set a shorter prompt
+        // retry
+    }
+}
+```
+
+Tips for staying inside the window:
+- Use `.memory { contextSize(…) }` generously (prompt + `maxTokens` + 1 must fit).
+- Keep the `systemPrompt` concise; trim old history in long conversations (auto-trimming is
+  planned; for now call `resetChat()`).
+- A prompt alone is decoded in chunks and never crashes regardless of length — the limit is
+  the context window, not the batch size.
+
+**Load errors.** `load()` throws if the model cannot be loaded on this device (see
+[compatibility](#checking-device-compatibility-before-downloading)) or if the GGUF is invalid.
+
+**Download errors.** `download()` never throws — it emits `ModelDownloadState.Failed(kind, message)`:
+- `compatibility` — refused before any network request (e.g. insufficient storage).
+- `verification` — `sha256` mismatch after download (file discarded).
+- `network` / `io` / `http` — transport failures.
+
+```kotlin
+sdk.models.download().collect { state ->
+    when (state) {
+        is ModelDownloadState.Failed -> {
+            when (state.kind) {
+                "verification" -> notifyUser("Download corrupted; retrying…")
+                else -> notifyUser(state.message)
+            }
+        }
+        is ModelDownloadState.Completed -> startChat(state.localPath)
+        else -> Unit
+    }
+}
+```
+
+**Unsupported features.** Calls outside a runtime's declared capabilities (e.g. embeddings on
+the llama runtime) throw `UnsupportedOperationException`. Check `RuntimePlugin.capabilities` /
+`sdk.models.checkCompatibility(requiredCapabilities = …)` up front if you depend on them.
 
 ## Using a model already on the device
 
