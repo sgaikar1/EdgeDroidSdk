@@ -27,33 +27,53 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
 
     private var initialized = false
+    private var gpuDeviceCount = 0
     private val tokenCounter = AtomicLong(0)
 
     override suspend fun initialize() {
         if (initialized) return
         NativeLlama.nativeInit()
+        gpuDeviceCount = NativeLlama.nativeGpuDeviceCount()
         initialized = true
         _state.value = RuntimeState.Initialized
-        config.log.log(LogProvider.Level.INFO, TAG, "llama backend initialized")
+        config.log.log(
+            LogProvider.Level.INFO, TAG,
+            "llama backend initialized, GPU devices: $gpuDeviceCount",
+        )
     }
 
     override suspend fun loadModel(model: Model, options: RuntimeConfig): ModelHandle {
         val path = model.localPath ?: throw IllegalArgumentException(
             "Model '${model.id}' has no local path — ensure it is downloaded before load",
         )
-        val handle = NativeLlama.nativeLoadModel(
+        val gpuConfig = options.memory.gpu
+        var nGpuLayers = gpuConfig.toNGpuLayers(gpuDeviceCount)
+
+        var handle = loadInternal(path, options, nGpuLayers)
+        // Safety net: a device may report Vulkan but fail at load time. Retry on CPU.
+        if (handle == 0L && nGpuLayers != 0) {
+            config.log.log(
+                LogProvider.Level.WARN, TAG,
+                "GPU load failed (gpuLayers=$nGpuLayers); falling back to CPU",
+            )
+            nGpuLayers = 0
+            handle = loadInternal(path, options, 0)
+        }
+        if (handle == 0L) throw RuntimeException("Failed to load model at $path")
+        _state.value = RuntimeState.ModelLoaded
+        return handle
+    }
+
+    private fun loadInternal(path: String, options: RuntimeConfig, nGpuLayers: Int): ModelHandle =
+        NativeLlama.nativeLoadModel(
             path = path,
             nCtx = options.memory.contextSize,
             nThreads = options.threading.threads,
             nThreadsBatch = options.threading.batchThreads,
             nBatch = options.memory.batchSize,
-            nGpuLayers = options.memory.gpuLayers,
+            nGpuLayers = nGpuLayers,
             mmap = options.memory.mmap,
         )
-        if (handle == 0L) throw RuntimeException("Failed to load model at $path")
-        _state.value = RuntimeState.ModelLoaded
-        return handle
-    }
 
     override suspend fun unload(handle: ModelHandle) {
         if (handle != 0L) NativeLlama.nativeUnload(handle)

@@ -9,6 +9,7 @@ import com.sgaikar1.edgedroid.core.CompatibilityIssue
 import com.sgaikar1.edgedroid.core.CompatibilityReport
 import com.sgaikar1.edgedroid.core.CompatibilitySeverity
 import com.sgaikar1.edgedroid.core.DeviceCapabilities
+import com.sgaikar1.edgedroid.core.GpuConfig
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelStorage
 
@@ -23,6 +24,7 @@ internal class DefaultCompatibilityChecker(
     private val storage: ModelStorage,
     private val registry: RuntimeRegistry,
     private val spec: RuntimeSpec,
+    private val gpuConfig: GpuConfig = GpuConfig.Auto,
     private val log: LogProvider = LogProvider.NO_OP,
 ) : CompatibilityChecker {
 
@@ -103,7 +105,19 @@ internal class DefaultCompatibilityChecker(
             )
         }
 
-        // 6. CPU cores — informational.
+        // 6. GPU policy — only matters when the app explicitly asked for GPU offload.
+        if (gpuConfig is GpuConfig.All || gpuConfig is GpuConfig.Layers) {
+            if (!device.vulkanSupported) {
+                issues += CompatibilityIssue(
+                    code = CompatibilityIssue.CODE_NO_VULKAN,
+                    severity = CompatibilitySeverity.WARNING,
+                    message = "GPU offload requested but this device reports no Vulkan support; " +
+                        "the runtime will fall back to CPU.",
+                )
+            }
+        }
+
+        // 7. CPU cores — informational.
         issues += CompatibilityIssue(
             code = CompatibilityIssue.CODE_CPU_CORES,
             severity = CompatibilitySeverity.INFO,

@@ -186,7 +186,12 @@ class LlmSdk private constructor(
             }
 
             val deviceCapabilities = AndroidDeviceCapabilities(appContext).get()
-            val checker = DefaultCompatibilityChecker(deviceCapabilities, storage, registry, spec, log)
+            val memoryConfig = memory.build()
+            val checker = DefaultCompatibilityChecker(
+                deviceCapabilities, storage, registry, spec,
+                gpuConfig = memoryConfig.gpu,
+                log = log,
+            )
 
             // Fail fast before touching the network if the download cannot possibly succeed.
             val downloader = DownloadManager(storage, downloadConfig.build(), log) { model ->
@@ -198,7 +203,7 @@ class LlmSdk private constructor(
             val provider = InternalModelProvider(storage, downloader, log)
             val runtimeConfig = RuntimeConfig(
                 threading = threading.build(),
-                memory = memory.build(),
+                memory = memoryConfig,
                 log = log,
             )
 

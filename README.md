@@ -88,10 +88,43 @@ sdk.stream("Summarize this text") { token ->
 | `.runtime(spec)` | `Runtime.AUTO`, `Runtime.byId("llama")`, or `Runtime.plugin(...)` — how the runtime is selected |
 | `.model(model)` | The model to download/load (`Model.remote(...)` or `Model.local(path)`). Optional if you call `loadModel(File)` later |
 | `.threading { }` | `threads`, `batchThreads` — compute parallelism |
-| `.memory { }` | `contextSize`, `batchSize`, `mmap`, `gpuLayers` — context / memory budget |
+| `.memory { }` | `contextSize`, `batchSize`, `mmap`, `gpu(...)` — context / memory / GPU budget |
 | `.download { }` | `maxRetries`, `connectTimeout`, `readTimeout`, `timeout`, `chunkBuffer` — downloader behaviour |
 | `.logging(provider)` | Plug in your logger via the `LogProvider` fun interface |
 | `.registerRuntime(plugin)` | Register an additional runtime before building |
+
+## GPU acceleration
+
+The SDK uses the **GPU automatically when a Vulkan device is available, otherwise CPU** —
+no configuration needed. On Android that's llama.cpp's Vulkan backend; it coexists with the
+CPU backend, which handles whatever layers aren't offloaded.
+
+```kotlin
+// Default — nothing to do:
+val sdk = LlmSdk.Builder(context).model(...).build()
+
+// Or be explicit:
+val sdk = LlmSdk.Builder(context)
+    .model(...)
+    .memory { gpu(GPU.AUTO) }          // detect Vulkan; offload all layers if present
+    .build()
+```
+
+| Policy | Behaviour |
+| --- | --- |
+| `GPU.AUTO` (default) | Offload all layers to the GPU when a Vulkan device is detected, else CPU |
+| `GPU.CPU` | Always CPU |
+| `GPU.ALL` | Offload all layers (falls back to CPU if loading fails) |
+| `GPU.Layers(n)` | Offload exactly `n` layers (0 = CPU) |
+
+How it works:
+
+- At runtime init the SDK asks llama.cpp how many GPU (Vulkan) devices were actually
+  enumerated — this is authoritative, not a guess from device properties.
+- If loading with GPU layers fails on a device with a broken driver, the SDK retries once
+  on CPU and logs a warning.
+- `sdk.models.checkCompatibility()` warns (`no_vulkan_gpu`) if you explicitly requested GPU
+  offload but the device reports no Vulkan support.
 
 ## Checking device compatibility before downloading
 
@@ -319,7 +352,14 @@ Send**.
 ## Building from source
 
 llama.cpp is a git submodule pinned at `b10285` under `runtime-llama/src/main/cpp/llama.cpp`.
-Built with Gradle NDK + CMake (CPU only, arm64-v8a + x86_64). After cloning:
+Built with Gradle NDK + CMake (**CPU + Vulkan GPU**, arm64-v8a + x86_64). The Vulkan backend
+compiles GLSL shaders at build time, which requires host tools on macOS:
+
+```
+brew install shaderc spirv-headers vulkan-headers ninja
+```
+
+After cloning:
 
 ```
 git submodule update --init --recursive

@@ -59,6 +59,19 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeInit(JNIEnv*, jobjec
     llama_backend_init();
 }
 
+// Number of GPU (Vulkan) devices the backend actually enumerated. 0 = CPU only.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGpuDeviceCount(JNIEnv*, jobject) {
+    int count = 0;
+    const size_t n_devs = ggml_backend_dev_count();
+    for (size_t i = 0; i < n_devs; ++i) {
+        if (ggml_backend_dev_type(ggml_backend_dev_get(i)) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            count++;
+        }
+    }
+    return count;
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
         JNIEnv* env, jobject,

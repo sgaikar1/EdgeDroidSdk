@@ -28,18 +28,21 @@ data class ThreadingConfig(
 data class MemoryConfig(
     val contextSize: Int = 4096,
     val mmap: Boolean = true,
-    val gpuLayers: Int = 0,
+    val gpu: GpuConfig = GpuConfig.Auto,
     val batchSize: Int = 512,
 ) {
     class Builder {
         private var contextSizeValue: Int = 4096
         private var mmapValue: Boolean = true
-        private var gpuLayersValue: Int = 0
+        private var gpuValue: GpuConfig = GpuConfig.Auto
         private var batchSizeValue: Int = 512
         fun contextSize(value: Int): Builder = apply { contextSizeValue = value }
         fun mmap(value: Boolean): Builder = apply { mmapValue = value }
-        fun gpuLayers(value: Int): Builder = apply { gpuLayersValue = value }
+        fun gpu(value: GpuConfig): Builder = apply { gpuValue = value }
+
+        /** Legacy convenience: offload [value] layers to the GPU (0 = CPU). */
+        fun gpuLayers(value: Int): Builder = apply { gpuValue = GpuConfig.Layers(value) }
         fun batchSize(value: Int): Builder = apply { batchSizeValue = value }
-        fun build(): MemoryConfig = MemoryConfig(contextSizeValue, mmapValue, gpuLayersValue, batchSizeValue)
+        fun build(): MemoryConfig = MemoryConfig(contextSizeValue, mmapValue, gpuValue, batchSizeValue)
     }
 }

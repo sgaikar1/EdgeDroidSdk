@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.api.internal
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.app.ActivityManager
@@ -24,6 +25,9 @@ internal class AndroidDeviceCapabilities(context: Context) {
             availableRamBytes = memoryInfo.availMem,
             freeStorageBytes = Environment.getDataDirectory().usableSpace,
             cpuCores = Runtime.getRuntime().availableProcessors(),
+            vulkanSupported = appContext.packageManager.hasSystemFeature(
+                PackageManager.FEATURE_VULKAN_HARDWARE_VERSION,
+            ),
         )
     }
 }

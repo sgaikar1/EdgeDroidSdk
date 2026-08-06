@@ -16,6 +16,9 @@ internal object NativeLlama {
 
     external fun nativeInit()
 
+    /** Number of GPU (Vulkan) devices the backend enumerated; 0 = CPU only. */
+    external fun nativeGpuDeviceCount(): Int
+
     external fun nativeLoadModel(
         path: String,
         nCtx: Int,
