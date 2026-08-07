@@ -7,6 +7,7 @@ import com.sgaikar1.edgedroid.core.Capability
 import com.sgaikar1.edgedroid.core.CompatibilityIssue
 import com.sgaikar1.edgedroid.core.CompatibilitySeverity
 import com.sgaikar1.edgedroid.core.DeviceCapabilities
+import com.sgaikar1.edgedroid.core.GpuConfig
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelStorage
 import com.sgaikar1.edgedroid.core.Runtime
@@ -64,19 +65,42 @@ class DefaultCompatibilityCheckerTest {
         device: DeviceCapabilities,
         storage: ModelStorage = FakeStorage(),
         registry: RuntimeRegistry = registryWithLlama(),
-    ): DefaultCompatibilityChecker = DefaultCompatibilityChecker(device, storage, registry, RuntimeSpec.Auto)
+        gpu: GpuConfig = GpuConfig.Auto,
+    ): DefaultCompatibilityChecker = DefaultCompatibilityChecker(device, storage, registry, RuntimeSpec.Auto, gpuConfig = gpu)
 
     private fun device(
         free: Long = 5 * gb,
         ram: Long = 8 * gb,
         abis: List<String> = listOf("arm64-v8a"),
+        vulkan: Boolean = true,
     ): DeviceCapabilities = DeviceCapabilities(
         supportedAbis = abis,
         totalRamBytes = ram,
         availableRamBytes = ram / 2,
         freeStorageBytes = free,
         cpuCores = 8,
+        vulkanSupported = vulkan,
     )
+
+    @Test
+    fun `explicit gpu offload without vulkan warns`() {
+        val report = checker(device(vulkan = false), gpu = GpuConfig.All).check(model())
+        assertTrue(report.isDownloadable)
+        assertTrue(report.warnings.any { it.code == CompatibilityIssue.CODE_NO_VULKAN })
+    }
+
+    @Test
+    fun `auto gpu without vulkan stays silent`() {
+        val report = checker(device(vulkan = false), gpu = GpuConfig.Auto).check(model())
+        assertTrue(report.isDownloadable)
+        assertFalse(report.warnings.any { it.code == CompatibilityIssue.CODE_NO_VULKAN })
+    }
+
+    @Test
+    fun `explicit gpu offload with vulkan has no warning`() {
+        val report = checker(device(vulkan = true), gpu = GpuConfig.All).check(model())
+        assertFalse(report.warnings.any { it.code == CompatibilityIssue.CODE_NO_VULKAN })
+    }
 
     @Test
     fun `insufficient storage is a hard error and blocks download`() {

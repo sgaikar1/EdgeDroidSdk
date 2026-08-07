@@ -15,4 +15,6 @@ data class DeviceCapabilities(
     val freeStorageBytes: Long = 0L,
     /** Number of logical CPU cores. */
     val cpuCores: Int = 0,
+    /** True if the device reports Vulkan hardware support (from PackageManager). */
+    val vulkanSupported: Boolean = false,
 )

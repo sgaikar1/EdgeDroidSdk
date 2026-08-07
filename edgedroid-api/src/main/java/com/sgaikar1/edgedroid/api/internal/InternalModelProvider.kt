@@ -10,6 +10,7 @@ import com.sgaikar1.edgedroid.core.ModelProvider
 import com.sgaikar1.edgedroid.core.ModelStorage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import java.io.File
 
 internal class InternalModelProvider(
     private val storage: ModelStorage,
@@ -23,6 +24,12 @@ internal class InternalModelProvider(
 
     override suspend fun getLocalPath(model: Model): String {
         if (storage.isDownloaded(model)) {
+            // Adopted local models record the exact file path; honor it (LlmSdk.loadModel(file)).
+            val recorded = storage.resolve(model.id)?.metadata?.get("localPath")
+            if (!recorded.isNullOrBlank() && File(recorded).isFile) {
+                log.log(LogProvider.Level.DEBUG, TAG, "Model '${model.id}' is an adopted local file at $recorded")
+                return File(recorded).absolutePath
+            }
             val cached = storage.modelPath(model).absolutePath
             log.log(LogProvider.Level.DEBUG, TAG, "Model '${model.id}' already on device at $cached")
             return cached

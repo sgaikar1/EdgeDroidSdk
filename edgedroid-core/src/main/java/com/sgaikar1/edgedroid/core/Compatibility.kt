@@ -45,6 +45,7 @@ data class CompatibilityIssue(
         const val CODE_MODEL_FILE_MISSING = "model_file_missing"
         const val CODE_LOW_RAM = "low_ram"
         const val CODE_ABI_MISMATCH = "abi_mismatch"
+        const val CODE_NO_VULKAN = "no_vulkan_gpu"
         const val CODE_UNKNOWN_MODEL_SIZE = "unknown_model_size"
         const val CODE_CPU_CORES = "cpu_cores"
     }

@@ -19,20 +19,29 @@ android {
         }
         externalNativeBuild {
             cmake {
-                cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
+                cppFlags += listOf(
+                    "-std=c++17", "-fexceptions", "-frtti",
+                    // Vulkan C++ bindings for the ggml-vulkan backend (host brew install).
+                    "-I/opt/homebrew/include",
+                )
                 arguments += listOf(
                     "-DGGML_NATIVE=OFF",
                     "-DGGML_METAL=OFF",
                     "-DGGML_OPENMP=OFF",
                     "-DGGML_BLAS=OFF",
                     "-DGGML_CUBLAS=OFF",
-                    "-DGGML_VULKAN=OFF",
+                    "-DGGML_VULKAN=ON",
+                    "-DGGML_VULKAN_MEMORY_DEBUG=OFF",
                     "-DLLAMA_BUILD_TESTS=OFF",
                     "-DLLAMA_BUILD_EXAMPLES=OFF",
                     "-DLLAMA_BUILD_SERVER=OFF",
                     "-DLLAMA_BUILD_TESTS=OFF",
                     "-DLLAMA_BUILD_TOOLS=OFF",
                     "-DLLAMA_CURL=OFF",
+                    // Homebrew host tools for the Vulkan shader build (Apple Silicon).
+                    "-DCMAKE_PREFIX_PATH=/opt/homebrew",
+                    "-DVulkan_GLSLC_EXECUTABLE=/opt/homebrew/bin/glslc",
+                    "-DSPIRV-Headers_DIR=/opt/homebrew/share/cmake/SPIRV-Headers",
                 )
             }
         }
