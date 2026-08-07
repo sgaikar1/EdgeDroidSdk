@@ -31,9 +31,15 @@ internal object NativeLlama {
 
     external fun nativeTokenize(handle: Long, text: String): IntArray
 
+    /**
+     * Decodes [prefix] into the session's KV cache (positions 0..P-1) and caches it. No-op when
+     * the prefix tokens are unchanged from the previous call. Returns true on success.
+     */
+    external fun nativeSetPrefix(handle: Long, prefix: String): Boolean
+
     external fun nativeGenerate(
         handle: Long,
-        prompt: String,
+        body: String,
         temperature: Float,
         topK: Int,
         topP: Float,

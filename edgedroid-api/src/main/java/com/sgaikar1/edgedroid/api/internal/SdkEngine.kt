@@ -113,10 +113,10 @@ internal class SdkEngine(
         val h = handle
 
         session.addUserMessage(prompt)
-        val rendered = session.buildPrompt(processor, template)
+        val parts = session.buildPromptParts(processor, template)
 
         val sb = StringBuilder()
-        r.generate(h, rendered, options).collect { token ->
+        r.generate(h, parts, options).collect { token ->
             sb.append(token.text)
             emit(token)
         }

@@ -8,6 +8,7 @@ import com.sgaikar1.edgedroid.common.Token
 import com.sgaikar1.edgedroid.core.Capability
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelHandle
+import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.Runtime
 import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimePlugin
@@ -57,7 +58,7 @@ class RuntimeSelectorTest {
         override suspend fun initialize() { _state.value = RuntimeState.Initialized }
         override suspend fun loadModel(model: Model, options: RuntimeConfig): ModelHandle = 1L
         override suspend fun unload(handle: ModelHandle) {}
-        override suspend fun generate(handle: ModelHandle, prompt: String, options: GenerationOptions): Flow<Token> =
+        override suspend fun generate(handle: ModelHandle, prompt: PromptProcessor.PromptParts, options: GenerationOptions): Flow<Token> =
             flow { emit(Token(0, 0, "$name:${options.maxTokens}")) }
         override suspend fun tokenize(handle: ModelHandle, text: String): List<Int> = emptyList()
         override suspend fun embeddings(handle: ModelHandle, text: String): FloatArray = floatArrayOf()
@@ -73,7 +74,7 @@ class RuntimeSelectorTest {
         val result = RuntimeSelector.select(registry, RuntimeSpec.Auto, llamaModel, RuntimeConfig())
         assertTrue(result is SdkResult.Success)
 
-        val token = (result as SdkResult.Success).value.generate(1L, "x", GenerationOptions()).first()
+        val token = (result as SdkResult.Success).value.generate(1L, PromptProcessor.PromptParts("p", "x"), GenerationOptions()).first()
         assertEquals("llama:256", token.text)
     }
 
@@ -86,7 +87,7 @@ class RuntimeSelectorTest {
         val pteModel = llamaModel.copy(format = ModelFormat.PTE)
         val result = RuntimeSelector.select(registry, RuntimeSpec.Auto, pteModel, RuntimeConfig())
         assertTrue(result is SdkResult.Success)
-        val token = (result as SdkResult.Success).value.generate(1L, "x", GenerationOptions()).first()
+        val token = (result as SdkResult.Success).value.generate(1L, PromptProcessor.PromptParts("p", "x"), GenerationOptions()).first()
         assertEquals("executorch:256", token.text)
     }
 
@@ -98,7 +99,7 @@ class RuntimeSelectorTest {
         val plugin = FakeExecPlugin()
         val result = RuntimeSelector.select(registry, RuntimeSpec.ByPlugin(plugin), llamaModel, RuntimeConfig())
         assertTrue(result is SdkResult.Success)
-        val token = (result as SdkResult.Success).value.generate(1L, "x", GenerationOptions()).first()
+        val token = (result as SdkResult.Success).value.generate(1L, PromptProcessor.PromptParts("p", "x"), GenerationOptions()).first()
         assertEquals("executorch:256", token.text)
     }
 

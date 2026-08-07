@@ -20,7 +20,7 @@ The SDK owns **everything except inference**: downloads, storage, runtime select
 prompt rendering, threading, model formats. Developers never touch JNI, GGUF, paths, or
 runtime initialization.
 
-Published on **Maven Central** as `io.github.sgaikar1` (version `0.4.0`). SDK Kotlin footprint
+Published on **Maven Central** as `io.github.sgaikar1` (version `0.5.0`). SDK Kotlin footprint
 is ~170 KB; the llama.cpp AAR is ~3.9 MB (arm64 + x86_64).
 
 ## Installation
@@ -41,8 +41,8 @@ dependencyResolutionManagement {
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("io.github.sgaikar1:edgedroid-api:0.4.0")
-    implementation("io.github.sgaikar1:runtime-llama:0.4.0") // or any other runtime plugin
+    implementation("io.github.sgaikar1:edgedroid-api:0.5.0")
+    implementation("io.github.sgaikar1:runtime-llama:0.5.0") // or any other runtime plugin
 }
 ```
 

@@ -24,6 +24,11 @@ struct LlamaSession {
     llama_context* ctx = nullptr;
     int32_t n_batch = 256;
     std::atomic<bool> stop{false};
+    // Cached KV prefix (system prompt + user opener). Decoded once, reused across calls.
+    std::vector<llama_token> cached_prefix;
+    bool prefix_valid = false;
+    // Serializes decode/generate so a concurrent call can't corrupt the shared KV cache.
+    std::mutex session_mutex;
 };
 
 static std::mutex g_mutex;
@@ -66,6 +71,31 @@ static LlamaSession* remove_session(jlong handle) {
 static void jni_throw(JNIEnv* env, const char* message) {
     jclass ex = env->FindClass("java/lang/RuntimeException");
     env->ThrowNew(ex, message);
+}
+
+// Decodes tokens into the KV cache at explicit positions [base, base+n). Positions are
+// explicit so the prefix (0..P-1) can be cached and reused; the body starts at P. Only the
+// final prompt token requests logits (needed to sample the first generated token).
+static bool decode_tokens_at(LlamaSession* s, const std::vector<llama_token>& tokens,
+                             llama_pos base, bool want_last_logits) {
+    const int32_t n_total = (int32_t) tokens.size();
+    if (n_total == 0) return true;
+    for (int32_t off = 0; off < n_total; off += s->n_batch) {
+        const int32_t n = std::min(s->n_batch, n_total - off);
+        llama_batch batch = llama_batch_init(n, 0, 1);
+        batch.n_tokens = n;
+        for (int32_t i = 0; i < n; ++i) {
+            batch.token[i] = tokens[off + i];
+            batch.pos[i] = base + off + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0; // seq_id[i] is pre-allocated (n_seq_max=1); write into it
+            batch.logits[i] = want_last_logits && (off + i == n_total - 1);
+        }
+        const bool ok = llama_decode(s->ctx, batch) == 0;
+        llama_batch_free(batch);
+        if (!ok) return false;
+    }
+    return true;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -161,10 +191,52 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeTokenize(
     return result;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeSetPrefix(
+        JNIEnv* env, jobject, jlong handle, jstring jPrefix) {
+
+    LlamaSession* s = lookup_session(handle);
+    if (!s || !s->model || !s->ctx) {
+        jni_throw(env, "model not loaded");
+        return JNI_FALSE;
+    }
+    std::lock_guard<std::mutex> lock(s->session_mutex);
+
+    const char* prefix = env->GetStringUTFChars(jPrefix, nullptr);
+    std::string text(prefix ? prefix : "");
+    env->ReleaseStringUTFChars(jPrefix, prefix);
+
+    const llama_vocab* vocab = llama_model_get_vocab(s->model);
+    if (!vocab) return JNI_FALSE;
+
+    std::vector<llama_token> tokens(text.length() + 8);
+    int32_t n_tok = llama_tokenize(vocab, text.data(), (int32_t) text.length(),
+                                   tokens.data(), (int32_t) tokens.size(), true, true);
+    if (n_tok < 0) n_tok = 0;
+    tokens.resize(n_tok);
+
+    // Same prefix as last time -> KV is already cached; skip the re-decode.
+    if (s->prefix_valid && s->cached_prefix == tokens) {
+        return JNI_TRUE;
+    }
+
+    // New prefix: clear the whole cache and decode the prefix once at positions 0..P-1.
+    llama_memory_seq_rm(llama_get_memory(s->ctx), -1, -1, -1);
+    if (!decode_tokens_at(s, tokens, 0, false)) {
+        std::string message = "prefix decoding failed";
+        if (!g_last_error.empty()) message += ": " + g_last_error;
+        jni_throw(env, message.c_str());
+        return JNI_FALSE;
+    }
+    s->cached_prefix = std::move(tokens);
+    s->prefix_valid = true;
+    return JNI_TRUE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
         JNIEnv* env, jobject,
-        jlong handle, jstring jPrompt,
+        jlong handle, jstring jBody,
         jfloat temperature, jint topK, jfloat topP, jfloat minP,
         jint maxTokens, jfloat repeatPenalty, jint seed,
         jobject callback) {
@@ -174,60 +246,47 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
         jni_throw(env, "model not loaded");
         return;
     }
+    std::lock_guard<std::mutex> lock(s->session_mutex);
     s->stop = false;
-
-    // llama_batch_get_one() uses pos=nullptr, so llama.cpp auto-advances the
-    // context position from its current state. Without resetting here, a second
-    // generate would continue past n_ctx and fail ("KV cache full"). Each call is
-    // stateless, so always start from position 0.
-    llama_memory_seq_rm(llama_get_memory(s->ctx), -1, -1, -1);
-
-    const char* prompt = env->GetStringUTFChars(jPrompt, nullptr);
-    std::string text(prompt ? prompt : "");
-    env->ReleaseStringUTFChars(jPrompt, prompt);
 
     const llama_vocab* vocab = llama_model_get_vocab(s->model);
     if (!vocab) return;
 
-    // --- encode prompt ---
+    // The prefix (system prompt) KV lives at positions [0, P). Trim everything >= P so a
+    // shorter previous body doesn't leave stale KV behind, then decode the body at P.
+    const llama_pos prefix_len = s->prefix_valid ? (llama_pos) s->cached_prefix.size() : 0;
+    llama_memory_seq_rm(llama_get_memory(s->ctx), -1, prefix_len, -1);
+
+    const char* body = env->GetStringUTFChars(jBody, nullptr);
+    std::string text(body ? body : "");
+    env->ReleaseStringUTFChars(jBody, body);
+
     std::vector<llama_token> tokens(text.length() + 8);
     int32_t n_tok = llama_tokenize(vocab, text.data(), (int32_t) text.length(),
                                    tokens.data(), (int32_t) tokens.size(), true, true);
     if (n_tok < 0) n_tok = 0;
     tokens.resize(n_tok);
 
-    // Guard: the prompt (plus generated tokens) must fit the context window.
-    // Context overflow is graceful inside llama.cpp, but would truncate the answer,
-    // so surface it to the caller instead.
-    if (n_tok > 0) {
-        const int32_t room = (int32_t) llama_n_ctx(s->ctx) - maxTokens - 1;
-        if (room <= 0) {
-            jni_throw(env, "context window too small for the requested maxTokens");
-            return;
-        }
-        if (n_tok > room) {
-            jni_throw(env, ("prompt of " + std::to_string(n_tok) +
-                            " tokens exceeds the context window (n_ctx=" +
-                            std::to_string((int32_t) llama_n_ctx(s->ctx)) +
-                            ", maxTokens=" + std::to_string(maxTokens) + ")").c_str());
-            return;
-        }
+    // Guard: prefix + body + generated tokens must fit the context window.
+    const int32_t total = prefix_len + n_tok;
+    const int32_t room = (int32_t) llama_n_ctx(s->ctx) - maxTokens - 1;
+    if (room <= 0) {
+        jni_throw(env, "context window too small for the requested maxTokens");
+        return;
+    }
+    if (total > room) {
+        jni_throw(env, ("prompt of " + std::to_string(total) +
+                        " tokens exceeds the context window (n_ctx=" +
+                        std::to_string((int32_t) llama_n_ctx(s->ctx)) +
+                        ", maxTokens=" + std::to_string(maxTokens) + ")").c_str());
+        return;
     }
 
-    // Encode the prompt in n_batch-sized chunks. llama_decode hard-asserts (SIGABRT)
-    // when a single batch exceeds cparams.n_batch, so never pass more than n_batch
-    // tokens per call. Positions are tracked automatically for get_one batches.
-    for (int32_t off = 0; off < n_tok; off += s->n_batch) {
-        const int32_t n = std::min(s->n_batch, n_tok - off);
-        llama_batch batch = llama_batch_get_one(tokens.data() + off, n);
-        if (llama_decode(s->ctx, batch) != 0) {
-            std::string message = "prompt decoding failed";
-            if (!g_last_error.empty()) {
-                message += ": " + g_last_error;
-            }
-            jni_throw(env, message.c_str());
-            return;
-        }
+    if (!decode_tokens_at(s, tokens, prefix_len, true)) {
+        std::string message = "prompt decoding failed";
+        if (!g_last_error.empty()) message += ": " + g_last_error;
+        jni_throw(env, message.c_str());
+        return;
     }
 
     // --- sampler chain ---

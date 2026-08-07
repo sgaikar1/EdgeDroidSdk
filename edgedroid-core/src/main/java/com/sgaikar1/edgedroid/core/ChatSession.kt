@@ -14,4 +14,10 @@ interface ChatSession {
     fun reset()
 
     fun buildPrompt(processor: PromptProcessor, template: PromptProcessor.Template): String
+
+    /**
+     * Same as [buildPrompt] but split into a stable prefix + per-call body so runtimes can cache
+     * the prefix KV (see [PromptProcessor.buildParts]).
+     */
+    fun buildPromptParts(processor: PromptProcessor, template: PromptProcessor.Template): PromptProcessor.PromptParts
 }

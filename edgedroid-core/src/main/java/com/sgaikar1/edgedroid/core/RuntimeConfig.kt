@@ -13,15 +13,25 @@ data class RuntimeConfig(
 )
 
 data class ThreadingConfig(
-    val threads: Int = 4,
-    val batchThreads: Int = 4,
+    val threads: Int = deviceThreadCount(4),
+    val batchThreads: Int = deviceThreadCount(8),
 ) {
     class Builder {
-        private var threadsValue: Int = 4
-        private var batchThreadsValue: Int = 4
+        private var threadsValue: Int = deviceThreadCount(4)
+        private var batchThreadsValue: Int = deviceThreadCount(8)
         fun threads(value: Int): Builder = apply { threadsValue = value }
         fun batchThreads(value: Int): Builder = apply { batchThreadsValue = value }
         fun build(): ThreadingConfig = ThreadingConfig(threadsValue, batchThreadsValue)
+    }
+
+    companion object {
+        /**
+         * Device-aware thread count, capped by [maxCores]. Generation is the
+         * sustained CPU cost on-device; a lower thread cap keeps peak CPU under
+         * aggressive OEM process watchdogs (e.g. ColorOS killing >90% CPU apps).
+         */
+        private fun deviceThreadCount(maxCores: Int): Int =
+            java.lang.Runtime.getRuntime().availableProcessors().coerceIn(2, maxCores)
     }
 }
 

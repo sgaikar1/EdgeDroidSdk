@@ -5,6 +5,7 @@ import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.Token
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelHandle
+import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.Runtime
 import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimeState
@@ -32,8 +33,10 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
 
     override suspend fun initialize() {
         if (initialized) return
-        NativeLlama.nativeInit()
-        gpuDeviceCount = NativeLlama.nativeGpuDeviceCount()
+        withContext(Dispatchers.Default) {
+            NativeLlama.nativeInit()
+            gpuDeviceCount = NativeLlama.nativeGpuDeviceCount()
+        }
         initialized = true
         _state.value = RuntimeState.Initialized
         config.log.log(
@@ -64,25 +67,27 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
         return handle
     }
 
-    private fun loadInternal(path: String, options: RuntimeConfig, nGpuLayers: Int): ModelHandle =
-        NativeLlama.nativeLoadModel(
-            path = path,
-            nCtx = options.memory.contextSize,
-            nThreads = options.threading.threads,
-            nThreadsBatch = options.threading.batchThreads,
-            nBatch = options.memory.batchSize,
-            nGpuLayers = nGpuLayers,
-            mmap = options.memory.mmap,
-        )
+    private suspend fun loadInternal(path: String, options: RuntimeConfig, nGpuLayers: Int): ModelHandle =
+        withContext(Dispatchers.Default) {
+            NativeLlama.nativeLoadModel(
+                path = path,
+                nCtx = options.memory.contextSize,
+                nThreads = options.threading.threads,
+                nThreadsBatch = options.threading.batchThreads,
+                nBatch = options.memory.batchSize,
+                nGpuLayers = nGpuLayers,
+                mmap = options.memory.mmap,
+            )
+        }
 
     override suspend fun unload(handle: ModelHandle) {
-        if (handle != 0L) NativeLlama.nativeUnload(handle)
+        if (handle != 0L) withContext(Dispatchers.Default) { NativeLlama.nativeUnload(handle) }
         _state.value = RuntimeState.Initialized
     }
 
     override suspend fun generate(
         handle: ModelHandle,
-        prompt: String,
+        prompt: PromptProcessor.PromptParts,
         options: GenerationOptions,
     ): Flow<Token> = callbackFlow {
         var index = 0L
@@ -91,9 +96,13 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
             index++
         }
         withContext(Dispatchers.Default) {
+            // Cache the (constant) system-prefix KV once; only the per-call body is re-decoded.
+            if (!NativeLlama.nativeSetPrefix(handle, prompt.prefix)) {
+                throw IllegalStateException("Failed to cache prompt prefix")
+            }
             NativeLlama.nativeGenerate(
                 handle = handle,
-                prompt = prompt,
+                body = prompt.body,
                 temperature = options.temperature,
                 topK = options.topK,
                 topP = options.topP,

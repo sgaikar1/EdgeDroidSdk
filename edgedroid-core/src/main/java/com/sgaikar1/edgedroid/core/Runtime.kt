@@ -26,7 +26,7 @@ interface Runtime {
     suspend fun initialize()
     suspend fun loadModel(model: Model, options: RuntimeConfig): ModelHandle
     suspend fun unload(handle: ModelHandle)
-    suspend fun generate(handle: ModelHandle, prompt: String, options: GenerationOptions): Flow<Token>
+    suspend fun generate(handle: ModelHandle, prompt: PromptProcessor.PromptParts, options: GenerationOptions): Flow<Token>
     suspend fun tokenize(handle: ModelHandle, text: String): List<Int>
     suspend fun embeddings(handle: ModelHandle, text: String): FloatArray
     suspend fun stop(handle: ModelHandle)

@@ -29,4 +29,9 @@ internal class DefaultChatSession : ChatSession {
         processor: PromptProcessor,
         template: PromptProcessor.Template,
     ): String = processor.build(template, history, systemPrompt)
+
+    override fun buildPromptParts(
+        processor: PromptProcessor,
+        template: PromptProcessor.Template,
+    ): PromptProcessor.PromptParts = processor.buildParts(template, history, systemPrompt)
 }
