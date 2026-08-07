@@ -29,6 +29,20 @@ struct LlamaSession {
 static std::mutex g_mutex;
 static std::unordered_map<jlong, LlamaSession*> g_sessions;
 
+// Last llama.cpp ERROR/WARN log lines, captured so load failures can be surfaced.
+static std::string g_last_error;
+
+static void log_capture_cb(ggml_log_level level, const char* text, void* /*user_data*/) {
+    if (text == nullptr) return;
+    std::string s(text);
+    if (!s.empty() && s.back() == '\n') s.pop_back();
+    if (s.empty()) return;
+    if (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN) {
+        if (g_last_error.size() < 2048) g_last_error += s + " | ";
+        else g_last_error.replace(g_last_error.end() - 3, g_last_error.end(), s + " | ");
+    }
+}
+
 static void register_session(jlong handle, LlamaSession* session) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_sessions[handle] = session;
@@ -57,6 +71,7 @@ static void jni_throw(JNIEnv* env, const char* message) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeInit(JNIEnv*, jobject) {
     llama_backend_init();
+    llama_log_set(log_capture_cb, nullptr);
 }
 
 // Number of GPU (Vulkan) devices the backend actually enumerated. 0 = CPU only.
@@ -86,10 +101,18 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
     mparams.n_gpu_layers = nGpuLayers;
     mparams.load_mode = mmap != 0 ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
 
+    g_last_error.clear();
+    llama_log_set(log_capture_cb, nullptr);
+
     llama_model* model = llama_model_load_from_file(path, mparams);
     env->ReleaseStringUTFChars(jPath, path);
     if (!model) {
-        jni_throw(env, "failed to load GGUF model");
+        std::string message = "failed to load GGUF model";
+        if (!g_last_error.empty()) {
+            message += ": " + g_last_error;
+        }
+        LOGE("%s", message.c_str());
+        jni_throw(env, message.c_str());
         return 0L;
     }
 
@@ -153,6 +176,12 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     }
     s->stop = false;
 
+    // llama_batch_get_one() uses pos=nullptr, so llama.cpp auto-advances the
+    // context position from its current state. Without resetting here, a second
+    // generate would continue past n_ctx and fail ("KV cache full"). Each call is
+    // stateless, so always start from position 0.
+    llama_memory_seq_rm(llama_get_memory(s->ctx), -1, -1, -1);
+
     const char* prompt = env->GetStringUTFChars(jPrompt, nullptr);
     std::string text(prompt ? prompt : "");
     env->ReleaseStringUTFChars(jPrompt, prompt);
@@ -192,7 +221,11 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
         const int32_t n = std::min(s->n_batch, n_tok - off);
         llama_batch batch = llama_batch_get_one(tokens.data() + off, n);
         if (llama_decode(s->ctx, batch) != 0) {
-            jni_throw(env, "prompt decoding failed");
+            std::string message = "prompt decoding failed";
+            if (!g_last_error.empty()) {
+                message += ": " + g_last_error;
+            }
+            jni_throw(env, message.c_str());
             return;
         }
     }
