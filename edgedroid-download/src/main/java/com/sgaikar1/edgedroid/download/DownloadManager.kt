@@ -119,6 +119,7 @@ class DownloadManager(
                 while (!done) {
                     val request = Request.Builder()
                         .url(url)
+                        .apply { config.headers.forEach { (k, v) -> header(k, v) } }
                         .apply { if (offset > 0) header("Range", "bytes=$offset-") }
                         .build()
 

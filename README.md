@@ -126,6 +126,27 @@ How it works:
 - `sdk.models.checkCompatibility()` warns (`no_vulkan_gpu`) if you explicitly requested GPU
   offload but the device reports no Vulkan support.
 
+## Private / gated models
+
+Attach auth headers to every download request for gated/private model files (Hugging Face
+gated repos, Git LFS, corporate storage):
+
+```kotlin
+val sdk = LlmSdk.Builder(context)
+    .model(Model.remote(id = "gated-model", url = "https://huggingface.co/…/model.gguf"))
+    .download {
+        header("Authorization", "Bearer hf_…")   // or headers(mapOf(...)) to replace
+    }
+    .build()
+```
+
+- Headers are sent on the **initial and resumed** requests, so pause/resume keeps auth.
+- They are **never logged or persisted** — they live only in `DownloadConfig` (not in
+  `Model.metadata` or `metadata.json`).
+- `header(k, v)` adds/overrides one entry; `headers(map)` replaces the whole set.
+- OkHttp strips `Authorization` on **cross-host redirects**; for hosts that redirect to a
+  signed CDN, put the token in the URL instead (`Model.downloadUrl` already supports that).
+
 ## Checking device compatibility before downloading
 
 Ask the SDK whether this device can actually run the model **before** committing to a
