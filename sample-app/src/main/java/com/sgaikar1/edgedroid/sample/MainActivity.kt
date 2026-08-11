@@ -66,6 +66,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
+    val embeddingResult by viewModel.embeddingResult.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     var input by remember { mutableStateOf("") }
@@ -108,8 +109,17 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 Text(if (isLoading) "Loading…" else "Load")
             }
             TextButton(onClick = { viewModel.checkCompatibility() }) { Text("Check") }
+            TextButton(onClick = { viewModel.runEmbeddings() }) { Text("Embed") }
             TextButton(onClick = { viewModel.stop() }) { Text("Stop") }
             TextButton(onClick = { viewModel.clear() }) { Text("Clear") }
+        }
+
+        embeddingResult?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
         }
 
         compatibility?.let {

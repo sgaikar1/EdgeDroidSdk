@@ -22,13 +22,21 @@ interface PromptProcessor {
     data class Message(
         val role: Role,
         val content: String,
+        val images: List<PromptAttachment> = emptyList(),
     ) {
         enum class Role { SYSTEM, USER, ASSISTANT }
     }
 
+    /** Image input for vision-capable runtimes. Sent as-is; text-only runtimes ignore it. */
+    data class PromptAttachment(
+        val bytes: ByteArray,
+        val mimeType: String = "image/jpeg",
+    )
+
     data class PromptParts(
         val prefix: String,
         val body: String,
+        val attachments: List<PromptAttachment> = emptyList(),
     ) {
         /** Backwards-compatible full prompt. */
         fun render(): String = prefix + body

@@ -12,6 +12,7 @@ import com.sgaikar1.edgedroid.core.MemoryConfig
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelDownloadState
 import com.sgaikar1.edgedroid.core.ModelProvider
+import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimePlugin
 import com.sgaikar1.edgedroid.core.ThreadingConfig
@@ -71,27 +72,42 @@ class LlmSdk private constructor(
 
     /**
      * Stream a completion as a cold [Flow] of [Token]. The SDK handles session history,
-     * prompt rendering, runtime selection and threading.
+     * prompt rendering, runtime selection and threading. [images] are forwarded to vision-capable
+     * runtimes; text-only runtimes ignore them.
      */
-    fun stream(prompt: String, options: GenerationOptions = GenerationOptions.DEFAULT): Flow<Token> =
-        engine.stream(prompt, options)
+    fun stream(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
+        options: GenerationOptions = GenerationOptions.DEFAULT,
+    ): Flow<Token> = engine.stream(prompt, images, options)
 
     /**
      * Convenience streaming with a callback. Suspend until generation finishes.
      */
     suspend fun stream(
         prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
         options: GenerationOptions = GenerationOptions.DEFAULT,
         onToken: (Token) -> Unit,
     ) {
-        engine.stream(prompt, options).collect(onToken)
+        engine.stream(prompt, images, options).collect(onToken)
     }
 
     /**
      * Non-streaming completion returning the full text.
      */
-    suspend fun generate(prompt: String, options: GenerationOptions = GenerationOptions.DEFAULT): String =
-        engine.generate(prompt, options)
+    suspend fun generate(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
+        options: GenerationOptions = GenerationOptions.DEFAULT,
+    ): String = engine.generate(prompt, images, options)
+
+    /**
+     * Embedding vector for [text] using the loaded model. Requires the selected runtime to
+     * support [Capability.EMBEDDINGS] (e.g. the ONNX runtime with an embedding model); other
+     * runtimes throw [UnsupportedOperationException].
+     */
+    suspend fun embeddings(text: String): FloatArray = engine.embeddings(text)
 
     /**
      * Interrupt an in-flight generation.
@@ -161,6 +177,7 @@ class LlmSdk private constructor(
         private val memory = MemoryConfig.Builder()
         private var logProvider: LogProvider = LogProvider.NO_OP
         private val plugins = mutableListOf<RuntimePlugin>()
+        private val extras = mutableMapOf<String, Any>()
 
         fun runtime(spec: RuntimeSpec): Builder = apply { this.runtimeSpec = spec }
         fun model(model: Model): Builder = apply { this.model = model }
@@ -170,6 +187,16 @@ class LlmSdk private constructor(
             apply { threading.apply(block) }
         fun memory(block: MemoryConfig.Builder.() -> Unit): Builder =
             apply { memory.apply(block) }
+
+        /** Add or override a runtime-specific configuration knob (e.g. `executionProvider`). */
+        fun extra(key: String, value: Any): Builder = apply { extras[key] = value }
+
+        /** Replace the whole set of runtime-specific configuration knobs. */
+        fun extras(map: Map<String, Any>): Builder = apply {
+            extras.clear()
+            extras.putAll(map)
+        }
+
         fun logging(provider: LogProvider): Builder = apply { this.logProvider = provider }
         fun registerRuntime(plugin: RuntimePlugin): Builder = apply { plugins.add(plugin) }
 
@@ -205,6 +232,7 @@ class LlmSdk private constructor(
                 threading = threading.build(),
                 memory = memoryConfig,
                 log = log,
+                extras = extras,
             )
 
             lateinit var engine: SdkEngine

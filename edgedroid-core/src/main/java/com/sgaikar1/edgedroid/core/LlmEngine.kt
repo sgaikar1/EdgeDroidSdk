@@ -22,8 +22,22 @@ sealed interface LlmEngineState {
 interface LlmEngine {
     suspend fun load()
     suspend fun unload()
-    suspend fun generate(prompt: String, options: GenerationOptions): String
-    fun stream(prompt: String, options: GenerationOptions): Flow<Token>
+    suspend fun generate(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
+        options: GenerationOptions = GenerationOptions.DEFAULT,
+    ): String
+    fun stream(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
+        options: GenerationOptions = GenerationOptions.DEFAULT,
+    ): Flow<Token>
+
+    /**
+     * Embedding vector for [text] using the loaded model. Only supported when the selected
+     * runtime declares [Capability.EMBEDDINGS]; other runtimes throw [UnsupportedOperationException].
+     */
+    suspend fun embeddings(text: String): FloatArray
     suspend fun stop()
     val state: StateFlow<LlmEngineState>
 }

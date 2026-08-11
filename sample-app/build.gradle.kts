@@ -46,6 +46,7 @@ android {
 dependencies {
     implementation(project(":edgedroid-api"))
     implementation(project(":runtime-llama"))
+    implementation(project(":runtime-onnx"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

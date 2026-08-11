@@ -339,6 +339,53 @@ sdk.registerRuntime(ExecPlugin())
 `RuntimeSelectorTest` in `:edgedroid-api` proves AUTO selection dispatches purely on
 `RuntimePlugin` metadata. The SDK never checks `if (runtime == ...)`.
 
+## Runtimes
+
+| Runtime | Artifact | Formats | Capabilities | Notes |
+| --- | --- | --- | --- | --- |
+| llama.cpp | `runtime-llama` | GGUF | STREAMING | CPU + Vulkan GPU, auto fallback |
+| ONNX Runtime | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings work today, LLM generation in progress |
+
+Register any runtime (or several) and `Runtime.AUTO` picks by model format + capabilities:
+
+```kotlin
+implementation("io.github.sgaikar1:runtime-onnx:0.7.0") // alongside or instead of runtime-llama
+```
+
+**Embeddings** (ONNX runtime, e.g. an `all-MiniLM-L6-v2` int8 export):
+
+```kotlin
+val sdk = LlmSdk.Builder(context)
+    .runtime(Runtime.plugin(OnnxPlugin()))
+    .model(
+        Model.remote(
+            id = "minilm",
+            url = "…/model_quantized.onnx",
+            format = ModelFormat.ONNX,
+            metadata = mapOf("tokenizerPath" to "/path/to/tokenizer.json"),
+        ),
+    )
+    .build()
+
+sdk.load()
+val v: FloatArray = sdk.embeddings("A cat sits on a mat.")
+```
+
+**Vision** — pass images to any `stream`/`generate` call; vision-capable runtimes consume them,
+text-only runtimes ignore them:
+
+```kotlin
+sdk.generate("What is in this picture?", images = listOf(PromptAttachment(bytes, "image/jpeg")))
+```
+
+`checkCompatibility(requiredCapabilities = [VISION])` verifies the selected runtime supports it.
+
+Runtime-specific knobs go through `extras` (e.g. ONNX execution provider):
+
+```kotlin
+LlmSdk.Builder(context).extra("executionProvider", "XNNPACK") // or "NNAPI"; default CPU
+```
+
 ## Modules
 
 | Module | Package | Responsibility |

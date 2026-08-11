@@ -12,8 +12,8 @@ internal class DefaultChatSession : ChatSession {
     override val history: List<PromptProcessor.Message>
         get() = messages.toList()
 
-    override fun addUserMessage(text: String) {
-        messages.add(PromptProcessor.Message(PromptProcessor.Message.Role.USER, text))
+    override fun addUserMessage(text: String, images: List<PromptProcessor.PromptAttachment>) {
+        messages.add(PromptProcessor.Message(PromptProcessor.Message.Role.USER, text, images))
     }
 
     override fun addAssistantMessage(text: String) {

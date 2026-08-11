@@ -38,9 +38,51 @@ class ChatViewModel(
     private val _compatibility = MutableStateFlow<String?>(null)
     val compatibility: StateFlow<String?> = _compatibility.asStateFlow()
 
+    private val _embeddingResult = MutableStateFlow<String?>(null)
+    val embeddingResult: StateFlow<String?> = _embeddingResult.asStateFlow()
+
     val engineState: StateFlow<LlmEngineState> = sdk.state
 
     private var generationJob: Job? = null
+
+    fun runEmbeddings() {
+        viewModelScope.launch {
+            _embeddingResult.value = "Loading ONNX embedding model…"
+            _error.value = null
+            try {
+                app.embeddingSdk.load()
+                val cat = app.embeddingSdk.embeddings("A cat sits on a mat.")
+                val dog = app.embeddingSdk.embeddings("A dog plays in the park.")
+                val physics = app.embeddingSdk.embeddings("Quantum physics is fascinating.")
+                val catDog = cosine(cat, dog)
+                val catPhysics = cosine(cat, physics)
+                android.util.Log.d(
+                    "EdgeDroid.Sample",
+                    "Embeddings done: catDog=$catDog catPhysics=$catPhysics dim=${cat.size}",
+                )
+                _embeddingResult.value = buildString {
+                    appendLine("cat vs dog: ${"%.3f".format(catDog)}")
+                    appendLine("cat vs physics: ${"%.3f".format(catPhysics)}")
+                    appendLine("dim=${cat.size}")
+                }
+            } catch (t: Throwable) {
+                _embeddingResult.value = null
+                _error.value = "Embeddings failed: ${t.message}"
+            }
+        }
+    }
+
+    private fun cosine(a: FloatArray, b: FloatArray): Double {
+        var dot = 0.0
+        var na = 0.0
+        var nb = 0.0
+        for (i in a.indices) {
+            dot += a[i] * b[i]
+            na += a[i] * a[i]
+            nb += b[i] * b[i]
+        }
+        return dot / (kotlin.math.sqrt(na) * kotlin.math.sqrt(nb))
+    }
 
     fun checkCompatibility() {
         val report = sdk.models.checkCompatibility()

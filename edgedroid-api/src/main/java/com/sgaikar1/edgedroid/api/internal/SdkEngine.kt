@@ -101,18 +101,26 @@ internal class SdkEngine(
         }
     }
 
-    override suspend fun generate(prompt: String, options: GenerationOptions): String {
+    override suspend fun generate(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment>,
+        options: GenerationOptions,
+    ): String {
         val sb = StringBuilder()
-        stream(prompt, options).collect { sb.append(it.text) }
+        stream(prompt, images, options).collect { sb.append(it.text) }
         return sb.toString()
     }
 
-    override fun stream(prompt: String, options: GenerationOptions): Flow<Token> = flow {
+    override fun stream(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment>,
+        options: GenerationOptions,
+    ): Flow<Token> = flow {
         ensureReady()
         val r = runtime ?: throw IllegalStateException("Runtime not ready")
         val h = handle
 
-        session.addUserMessage(prompt)
+        session.addUserMessage(prompt, images)
         val parts = session.buildPromptParts(processor, template)
 
         val sb = StringBuilder()
@@ -121,6 +129,12 @@ internal class SdkEngine(
             emit(token)
         }
         session.addAssistantMessage(sb.toString())
+    }
+
+    override suspend fun embeddings(text: String): FloatArray {
+        ensureReady()
+        val r = runtime ?: throw IllegalStateException("Runtime not ready")
+        return r.embeddings(handle, text)
     }
 
     override suspend fun stop() {
