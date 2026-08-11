@@ -344,7 +344,7 @@ sdk.registerRuntime(ExecPlugin())
 | Runtime | Artifact | Formats | Capabilities | Notes |
 | --- | --- | --- | --- | --- |
 | llama.cpp | `runtime-llama` | GGUF | STREAMING | CPU + Vulkan GPU, auto fallback |
-| ONNX Runtime | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings work today, LLM generation in progress |
+| ONNX Runtime | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM generation |
 
 Register any runtime (or several) and `Runtime.AUTO` picks by model format + capabilities:
 
@@ -370,6 +370,11 @@ val sdk = LlmSdk.Builder(context)
 sdk.load()
 val v: FloatArray = sdk.embeddings("A cat sits on a mat.")
 ```
+
+**LLM generation** on ONNX uses a full-context autoregressive loop (temperature/top-k/top-p,
+EOS, `stop()`). It requires a **no-KV-cache export** — exports that demand a `past_key_values`
+sequence input throw a clear error, because the raw ONNX Runtime Java API cannot construct
+sequence tensors (that path needs ONNX Runtime GenAI).
 
 **Vision** — pass images to any `stream`/`generate` call; vision-capable runtimes consume them,
 text-only runtimes ignore them:

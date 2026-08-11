@@ -25,6 +25,10 @@ internal class HfTokenizer private constructor(
     private val addsClsSep: Boolean,
 ) {
 
+    private val reverseVocab: Map<Int, String> = vocab.entries.associate { it.value to it.key }
+    private val specialIds: Set<Int> = specialTokenIds.values.toSet()
+    private val charToByte: Map<Char, Byte> = ByteLevel.charToByte
+
     fun encode(text: String, addSpecialTokens: Boolean = true): IntArray {
         val pieces = if (modelType.equals("BPE", ignoreCase = true)) {
             bpeEncode(text)
@@ -40,6 +44,44 @@ internal class HfTokenizer private constructor(
             specialTokenIds["[SEP]"]?.let { list += it }
         }
         return list.toIntArray()
+    }
+
+    /** Token id for a known special/token string, or null. */
+    fun tokenId(token: String): Int? = vocab[token] ?: specialTokenIds[token]
+
+    /** Common EOS tokens, in preference order. */
+    fun findEosTokenId(): Int? = EOS_CANDIDATES.firstNotNullOfOrNull { tokenId(it) }
+
+    /** Decode generated ids back into text (WordPiece + ByteLevel BPE). */
+    fun decode(ids: List<Int>): String = when {
+        modelType.equals("BPE", ignoreCase = true) -> bpeDecode(ids)
+        else -> wordPieceDecode(ids)
+    }
+
+    private fun wordPieceDecode(ids: List<Int>): String {
+        val sb = StringBuilder()
+        for (id in ids) {
+            if (id in specialIds) continue
+            val token = reverseVocab[id] ?: continue
+            if (token.startsWith(continuingSubwordPrefix)) {
+                sb.append(token.removePrefix(continuingSubwordPrefix))
+            } else {
+                if (sb.isNotEmpty()) sb.append(' ')
+                sb.append(token)
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun bpeDecode(ids: List<Int>): String {
+        val bytes = ArrayList<Byte>()
+        for (id in ids) {
+            val token = reverseVocab[id] ?: continue
+            for (ch in token) {
+                charToByte[ch]?.let { bytes.add(it) }
+            }
+        }
+        return String(bytes.toByteArray(), Charsets.UTF_8)
     }
 
     // ---- WordPiece ----
@@ -129,12 +171,15 @@ internal class HfTokenizer private constructor(
             map
         }
 
+        val charToByte: Map<Char, Byte> = byteToChar.entries.associate { it.value to it.key.toByte() }
+
         fun encode(text: String): String =
             text.encodeToByteArray().joinToString("") { byteToChar.getValue(it.toInt() and 0xFF).toString() }
     }
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
+        private val EOS_CANDIDATES = listOf("<|endoftext|>", "<|im_end|>", "<|eot_id|>", "</s>", "<s>", "[EOS]", "[END]")
 
         fun fromJson(text: String): HfTokenizer {
             val root = json.decodeFromString<TokenizerJson>(text)

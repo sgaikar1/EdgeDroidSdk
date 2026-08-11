@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.runtime.onnx
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,5 +66,22 @@ class HfTokenizerTest {
             intArrayOf(101, 2023, 2003, 1037, 3231, 102),
             tok.encode("This is a test"),
         )
+    }
+
+    @Test
+    fun `wordpiece decode reconstructs text`() {
+        val tok = HfTokenizer.fromJson(wordPieceJson)
+        assertEquals("hello world", tok.decode(listOf(7592, 2088)))
+        assertEquals("testing", tok.decode(listOf(1290, 2003)))
+    }
+
+    @Test
+    fun `real tokenizer round-trips encode decode`() {
+        val json = javaClass.getResourceAsStream("/all-minilm-tokenizer.json")!!
+            .bufferedReader().readText()
+        val tok = HfTokenizer.fromJson(json)
+        val ids = tok.encode("The quick brown fox")
+        val text = tok.decode(ids.toList())
+        assertEquals("the quick brown fox", text)
     }
 }

@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.FloatBuffer
@@ -36,6 +36,8 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
     private var session: OrtSession? = null
     private var tokenizer: HfTokenizer? = null
     private var embeddingDim = 384
+    private var eosTokenId: Int? = null
+    @Volatile private var stopRequested = false
 
     override suspend fun initialize() {
         if (env != null) return
@@ -59,6 +61,11 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             session?.close()
             session = s
             tokenizer = loadTokenizer(model, path)
+            val tok = tokenizer
+            eosTokenId = if (tok == null) null else {
+                val explicit = model.metadata["eosToken"]?.let(tok::tokenId)
+                explicit ?: tok.findEosTokenId()
+            }
             1L
         }
         _state.value = RuntimeState.ModelLoaded
@@ -105,9 +112,87 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
         handle: ModelHandle,
         prompt: PromptProcessor.PromptParts,
         options: GenerationOptions,
-    ): Flow<Token> = flow {
-        // B3: raw ORT autoregressive LLM loop — not yet implemented.
-        throw UnsupportedOperationException("ONNX LLM generation is not implemented yet (use the llama runtime)")
+    ): Flow<Token> = callbackFlow {
+        val s = session ?: throw IllegalStateException("Model not loaded")
+        val tok = tokenizer ?: throw IllegalStateException("No tokenizer for generation")
+        val e = env ?: throw IllegalStateException("Runtime not initialized")
+
+        // The raw ORT Java API cannot construct ONNX Sequence tensors, so a KV-cache
+        // (`past_key_values`) export cannot be driven. Reject it with a clear message;
+        // this runtime supports no-KV exports via a full-context autoregressive loop.
+        val kvInput = s.inputNames.firstOrNull { it.startsWith("past_key_values") }
+        if (kvInput != null) {
+            throw UnsupportedOperationException(
+                "This ONNX export requires the 'past_key_values' KV-cache sequence input, " +
+                    "which the raw ONNX Runtime Java API cannot construct. Use a no-KV export " +
+                    "or a KV-cache-capable runtime (e.g. ONNX Runtime GenAI).",
+            )
+        }
+
+        val logitsName = s.outputNames.firstOrNull { it == "logits" } ?: s.outputNames.first()
+        val inputIdsName = s.inputNames.firstOrNull { it.contains("input_ids") }
+            ?: throw UnsupportedOperationException("No 'input_ids' input found in the ONNX model")
+        val attentionName = s.inputNames.firstOrNull { it.contains("attention_mask") }
+        val positionName = s.inputNames.firstOrNull { it.contains("position_ids") }
+        val rng = java.util.Random(options.seed.toLong())
+        stopRequested = false
+
+        withContext(Dispatchers.Default) {
+            val promptIds = tok.encode(prompt.render(), addSpecialTokens = false).map { it.toLong() }
+            val allIds = mutableListOf<Long>()
+            allIds += promptIds
+            var index = 0L
+            val eosId = eosTokenId
+
+            try {
+                for (step in 0 until options.maxTokens) {
+                    if (stopRequested) break
+                    val seqLen = allIds.size
+                    val idsTensor = OnnxTensor.createTensor(e, arrayOf(allIds.toLongArray()))
+                    val attnTensor = if (attentionName != null) {
+                        OnnxTensor.createTensor(e, arrayOf(LongArray(seqLen) { 1L }))
+                    } else null
+                    val posTensor = if (positionName != null) {
+                        OnnxTensor.createTensor(e, arrayOf(LongArray(seqLen) { it.toLong() }))
+                    } else null
+
+                    val feeds = HashMap<String, OnnxTensor>()
+                    feeds[inputIdsName] = idsTensor
+                    if (attentionName != null && attnTensor != null) feeds[attentionName] = attnTensor
+                    if (positionName != null && posTensor != null) feeds[positionName] = posTensor
+
+                    val outputs = try {
+                        s.run(feeds)
+                    } finally {
+                        idsTensor.close()
+                        attnTensor?.close()
+                        posTensor?.close()
+                    }
+
+                    try {
+                        val logitsTensor = outputs.get(logitsName).get() as OnnxTensor
+                        val buf = logitsTensor.floatBuffer
+                        val vocab = buf.remaining() / seqLen
+                        val last = FloatArray(vocab)
+                        buf.position((seqLen - 1) * vocab)
+                        buf.get(last)
+
+                        val tokenId = Sampler.sample(last, options, rng)
+                        if (tokenId == eosId) break
+                        val piece = tok.decode(listOf(tokenId))
+                        if (piece.isNotEmpty()) {
+                            trySend(Token(index = index++, id = tokenId.toLong(), text = piece))
+                        }
+                        allIds += tokenId.toLong()
+                    } finally {
+                        outputs.close()
+                    }
+                }
+            } finally {
+                stopRequested = false
+            }
+        }
+        close()
     }
 
     override suspend fun tokenize(handle: ModelHandle, text: String): List<Int> =
@@ -179,7 +264,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
     }
 
     override suspend fun stop(handle: ModelHandle) {
-        // No-op for embeddings; wired for the LLM loop in B3.
+        stopRequested = true
     }
 
     companion object {
