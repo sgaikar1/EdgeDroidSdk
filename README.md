@@ -383,6 +383,10 @@ text-only runtimes ignore them:
 sdk.generate("What is in this picture?", images = listOf(PromptAttachment(bytes, "image/jpeg")))
 ```
 
+On the ONNX runtime the first image is decoded, resized to the model's `pixel_values` shape
+(detected from the session inputs, default 224×224), normalized (ImageNet stats) and fed as a
+float tensor — so `pixel_values`-style vision models are wired end-to-end.
+
 `checkCompatibility(requiredCapabilities = [VISION])` verifies the selected runtime supports it.
 
 Runtime-specific knobs go through `extras` (e.g. ONNX execution provider):

@@ -38,6 +38,9 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
     private var embeddingDim = 384
     private var eosTokenId: Int? = null
     @Volatile private var stopRequested = false
+    private var visionInputName: String? = null
+    private var visionWidth = 224
+    private var visionHeight = 224
 
     override suspend fun initialize() {
         if (env != null) return
@@ -66,6 +69,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
                 val explicit = model.metadata["eosToken"]?.let(tok::tokenId)
                 explicit ?: tok.findEosTokenId()
             }
+            detectVisionInput(s)
             1L
         }
         _state.value = RuntimeState.ModelLoaded
@@ -97,6 +101,30 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
         return runCatching { HfTokenizer.fromJson(file.readText()) }
             .onFailure { config.log.log(LogProvider.Level.WARN, TAG, "Failed to parse tokenizer.json: ${it.message}") }
             .getOrNull()
+    }
+
+    /** Find a `pixel_values`-style float image input and its [1,3,H,W] shape. */
+    private fun detectVisionInput(s: OrtSession) {
+        visionInputName = null
+        runCatching {
+            s.getInputInfo().entries.firstOrNull { (name, _) ->
+                name.contains("pixel_values") || name.contains("images") || name.contains("image_input")
+            }?.let { (name, node) ->
+                val tensor = node.info as? ai.onnxruntime.TensorInfo ?: return@let
+                val shape = tensor.getShape()
+                visionInputName = name
+                if (shape != null && shape.size >= 4) {
+                    visionHeight = shape[2].toInt().takeIf { it > 0 } ?: 224
+                    visionWidth = shape[3].toInt().takeIf { it > 0 } ?: 224
+                }
+                config.log.log(
+                    LogProvider.Level.INFO, TAG,
+                    "Vision input '$name' detected [$visionHeight x $visionWidth]",
+                )
+            }
+        }.onFailure {
+            config.log.log(LogProvider.Level.WARN, TAG, "Vision input detection failed: ${it.message}")
+        }
     }
 
     override suspend fun unload(handle: ModelHandle) {
@@ -144,6 +172,32 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             var index = 0L
             val eosId = eosTokenId
 
+            // Vision: decode the first image attachment into a pixel_values tensor once.
+            val visionTensor: OnnxTensor? = run {
+                val att = prompt.attachments.firstOrNull()
+                val vName = visionInputName
+                when {
+                    att == null -> null
+                    vName == null -> {
+                        config.log.log(LogProvider.Level.WARN, TAG, "Image attachment ignored: model has no vision input")
+                        null
+                    }
+                    else -> runCatching {
+                        val floats = ImagePreprocessor().prepare(
+                            att.bytes, visionWidth, visionHeight,
+                            ImagePreprocessor.IMAGENET_MEAN, ImagePreprocessor.IMAGENET_STD,
+                        )
+                        OnnxTensor.createTensor(
+                            e, java.nio.FloatBuffer.wrap(floats),
+                            longArrayOf(1L, 3L, visionHeight.toLong(), visionWidth.toLong()),
+                        )
+                    }.onFailure {
+                        config.log.log(LogProvider.Level.WARN, TAG, "Image preprocessing failed: ${it.message}")
+                        throw it
+                    }.getOrThrow()
+                }
+            }
+
             try {
                 for (step in 0 until options.maxTokens) {
                     if (stopRequested) break
@@ -160,6 +214,10 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
                     feeds[inputIdsName] = idsTensor
                     if (attentionName != null && attnTensor != null) feeds[attentionName] = attnTensor
                     if (positionName != null && posTensor != null) feeds[positionName] = posTensor
+                    val vName = visionInputName
+                    if (vName != null && visionTensor != null) {
+                        feeds[vName] = visionTensor
+                    }
 
                     val outputs = try {
                         s.run(feeds)
@@ -189,6 +247,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
                     }
                 }
             } finally {
+                visionTensor?.close()
                 stopRequested = false
             }
         }
