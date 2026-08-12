@@ -69,6 +69,7 @@ class EdgeDroidApp : Application() {
                 ),
             )
             .threading { threads(4); batchThreads(4) }
+            .extra("executionProvider", "NNAPI")
             .download { maxRetries(3); timeout(kotlin.time.Duration.parse("60s")) }
             .logging(logger)
             .build()
