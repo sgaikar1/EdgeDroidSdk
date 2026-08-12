@@ -1,8 +1,11 @@
 package com.sgaikar1.edgedroid.sample
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.core.LlmEngineState
 import com.sgaikar1.edgedroid.core.ModelDownloadState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,15 +13,21 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import com.sgaikar1.edgedroid.core.LlmEngineState
 
-data class ChatMessage(val role: String, val text: String)
+data class ChatMessage(
+    val role: String,
+    val text: String,
+    val reasoning: String? = null,
+)
 
 class ChatViewModel(
     private val app: EdgeDroidApp,
 ) : ViewModel() {
 
-    private val sdk = app.sdk
+    private val store = app.sampleStore
+    private val sdk get() = store.sdk
+
+    val config: StateFlow<SampleConfig> = store.config
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -32,6 +41,9 @@ class ChatViewModel(
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText: StateFlow<String?> = _streamingText.asStateFlow()
 
+    private val _reasoningText = MutableStateFlow<String?>(null)
+    val reasoningText: StateFlow<String?> = _reasoningText.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -41,25 +53,87 @@ class ChatViewModel(
     private val _embeddingResult = MutableStateFlow<String?>(null)
     val embeddingResult: StateFlow<String?> = _embeddingResult.asStateFlow()
 
-    val engineState: StateFlow<LlmEngineState> = sdk.state
+    val engineState: StateFlow<LlmEngineState> = store.sdkState
 
     private var generationJob: Job? = null
+
+    fun applyConfig(newConfig: SampleConfig) {
+        store.apply(newConfig)
+        _messages.value = emptyList()
+        _streamingText.value = null
+        _reasoningText.value = null
+        _embeddingResult.value = null
+        _compatibility.value = null
+        _error.value = null
+    }
+
+    // ---- chat ----
+
+    fun send(input: String) {
+        val text = input.trim()
+        if (text.isEmpty() || generationJob?.isActive == true) return
+        val cfg = config.value
+
+        _messages.update { it + ChatMessage("user", text) }
+        _streamingText.value = ""
+        _reasoningText.value = null
+        val raw = StringBuilder()
+        val answer = StringBuilder()
+        val reasoning = StringBuilder()
+
+        generationJob = viewModelScope.launch {
+            try {
+                sdk.stream(
+                    text,
+                    options = GenerationOptions(
+                        temperature = cfg.temperature,
+                        topK = cfg.topK,
+                        topP = cfg.topP,
+                    ),
+                ) { token: Token ->
+                    raw.append(token.text)
+                    val parts = ReasoningParser.split(raw.toString())
+                    parts.reasoning?.let { r ->
+                        reasoning.setLength(0)
+                        reasoning.append(r)
+                        _reasoningText.value = r
+                    }
+                    parts.answer.let { a ->
+                        answer.setLength(0)
+                        answer.append(a)
+                        _streamingText.value = a.ifEmpty { null }
+                    }
+                }
+                _messages.update {
+                    it + ChatMessage(
+                        "assistant",
+                        answer.toString(),
+                        reasoning.toString().ifEmpty { null },
+                    )
+                }
+            } catch (t: Throwable) {
+                _error.value = t.message ?: "Generation failed"
+            } finally {
+                _streamingText.value = null
+                _reasoningText.value = null
+            }
+        }
+    }
+
+    // ---- embeddings (ONNX embedding-capable models) ----
 
     fun runEmbeddings() {
         viewModelScope.launch {
             _embeddingResult.value = "Loading ONNX embedding model…"
             _error.value = null
             try {
-                app.embeddingSdk.load()
-                val cat = app.embeddingSdk.embeddings("A cat sits on a mat.")
-                val dog = app.embeddingSdk.embeddings("A dog plays in the park.")
-                val physics = app.embeddingSdk.embeddings("Quantum physics is fascinating.")
+                sdk.load()
+                val cat = sdk.embeddings("A cat sits on a mat.")
+                val dog = sdk.embeddings("A dog plays in the park.")
+                val physics = sdk.embeddings("Quantum physics is fascinating.")
                 val catDog = cosine(cat, dog)
                 val catPhysics = cosine(cat, physics)
-                android.util.Log.d(
-                    "EdgeDroid.Sample",
-                    "Embeddings done: catDog=$catDog catPhysics=$catPhysics dim=${cat.size}",
-                )
+                Log.d("EdgeDroid.Sample", "Embeddings done: catDog=$catDog catPhysics=$catPhysics dim=${cat.size}")
                 _embeddingResult.value = buildString {
                     appendLine("cat vs dog: ${"%.3f".format(catDog)}")
                     appendLine("cat vs physics: ${"%.3f".format(catPhysics)}")
@@ -83,6 +157,8 @@ class ChatViewModel(
         }
         return dot / (kotlin.math.sqrt(na) * kotlin.math.sqrt(nb))
     }
+
+    // ---- model lifecycle ----
 
     fun checkCompatibility() {
         val report = sdk.models.checkCompatibility()
@@ -127,29 +203,6 @@ class ChatViewModel(
         }
     }
 
-    fun send(input: String) {
-        val text = input.trim()
-        if (text.isEmpty() || generationJob?.isActive == true) return
-
-        _messages.update { it + ChatMessage("user", text) }
-        _streamingText.value = ""
-        val partial = StringBuilder()
-
-        generationJob = viewModelScope.launch {
-            try {
-                sdk.stream(text) { token: Token ->
-                    partial.append(token.text)
-                    _streamingText.value = partial.toString()
-                }
-                _messages.update { it + ChatMessage("assistant", partial.toString()) }
-            } catch (t: Throwable) {
-                _error.value = t.message ?: "Generation failed"
-            } finally {
-                _streamingText.value = null
-            }
-        }
-    }
-
     fun stop() {
         viewModelScope.launch { sdk.stop() }
     }
@@ -157,5 +210,7 @@ class ChatViewModel(
     fun clear() {
         sdk.resetChat()
         _messages.value = emptyList()
+        _reasoningText.value = null
+        _streamingText.value = null
     }
 }
