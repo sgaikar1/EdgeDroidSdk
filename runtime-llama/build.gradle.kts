@@ -37,6 +37,8 @@ android {
                     "-DLLAMA_BUILD_SERVER=OFF",
                     "-DLLAMA_BUILD_TESTS=OFF",
                     "-DLLAMA_BUILD_TOOLS=OFF",
+                    "-DLLAMA_BUILD_COMMON=ON",
+                    "-DLLAMA_BUILD_MTMD=ON",
                     "-DLLAMA_CURL=OFF",
                     // Homebrew host tools for the Vulkan shader build (Apple Silicon).
                     "-DCMAKE_PREFIX_PATH=/opt/homebrew",

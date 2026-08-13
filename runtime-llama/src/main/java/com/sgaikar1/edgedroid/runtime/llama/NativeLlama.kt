@@ -53,4 +53,22 @@ internal object NativeLlama {
     external fun nativeStop(handle: Long)
 
     external fun nativeUnload(handle: Long)
+
+    /** Load the mmproj vision encoder (image->embeddings) for a vision-capable model. */
+    external fun nativeLoadVisionModel(handle: Long, mmprojPath: String, nThreads: Int): Boolean
+
+    /** Image->text generation; the prompt text must contain the `<image>` marker. */
+    external fun nativeGenerateVision(
+        handle: Long,
+        prompt: String,
+        imageBytes: ByteArray,
+        temperature: Float,
+        topK: Int,
+        topP: Float,
+        minP: Float,
+        maxTokens: Int,
+        repeatPenalty: Float,
+        seed: Int,
+        callback: TokenCallback,
+    )
 }

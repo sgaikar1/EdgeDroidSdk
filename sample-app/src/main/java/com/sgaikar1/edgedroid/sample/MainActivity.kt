@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -58,6 +60,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleAttachIntent(intent)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -65,6 +68,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleAttachIntent(intent)
+    }
+
+    // Test hook: `adb shell am start -n .../.MainActivity --es attach_image <path>`
+    private fun handleAttachIntent(intent: Intent?) {
+        val path = intent?.getStringExtra("attach_image") ?: return
+        android.util.Log.d("EdgeDroid.Sample", "attach_image hook: $path")
+        runCatching {
+            viewModel.attachImage(java.io.File(path).readBytes())
+            android.util.Log.d("EdgeDroid.Sample", "attach_image ok: ${java.io.File(path).length()} bytes")
+        }.onFailure { android.util.Log.e("EdgeDroid.Sample", "attach_image failed", it) }
     }
 }
 
@@ -83,6 +101,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val embeddingResult by viewModel.embeddingResult.collectAsStateWithLifecycle()
     val downloadError by viewModel.downloadError.collectAsStateWithLifecycle()
     val downloadedIds by viewModel.downloadedIds.collectAsStateWithLifecycle()
+    val attachedImage by viewModel.attachedImage.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     var input by remember { mutableStateOf("") }
@@ -97,6 +116,17 @@ fun ChatScreen(viewModel: ChatViewModel) {
             PackageManager.PERMISSION_GRANTED
         ) {
             notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Photo picker for image->text with vision-capable models.
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { viewModel.attachImage(it.readBytes()) }
+            }
         }
     }
 
@@ -230,10 +260,33 @@ fun ChatScreen(viewModel: ChatViewModel) {
 
         Spacer(Modifier.height(8.dp))
 
+        attachedImage?.let { bytes ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "Attached image",
+                        modifier = Modifier.height(56.dp),
+                    )
+                } else {
+                    Text("Image attached", style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { viewModel.clearImage() }) { Text("Remove") }
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (config.model.visionCapable) {
+                TextButton(onClick = { imagePicker.launch("image/*") }) { Text("📷") }
+            }
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },

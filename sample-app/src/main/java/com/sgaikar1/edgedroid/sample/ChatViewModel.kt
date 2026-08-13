@@ -7,13 +7,13 @@ import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.Token
 import com.sgaikar1.edgedroid.core.LlmEngineState
 import com.sgaikar1.edgedroid.core.ModelDownloadState
+import com.sgaikar1.edgedroid.core.PromptProcessor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 data class ChatMessage(
     val role: String,
@@ -57,6 +57,17 @@ class ChatViewModel(
     private val _downloadError = MutableStateFlow<String?>(null)
     val downloadError: StateFlow<String?> = _downloadError.asStateFlow()
 
+    private val _attachedImage = MutableStateFlow<ByteArray?>(null)
+    val attachedImage: StateFlow<ByteArray?> = _attachedImage.asStateFlow()
+
+    fun attachImage(bytes: ByteArray) {
+        _attachedImage.value = bytes
+    }
+
+    fun clearImage() {
+        _attachedImage.value = null
+    }
+
     val engineState: StateFlow<LlmEngineState> = store.sdkState
 
     val downloadedIds: StateFlow<Set<String>> = store.downloadedIds
@@ -67,7 +78,11 @@ class ChatViewModel(
 
     fun applyConfig(newConfig: SampleConfig) {
         viewModelScope.launch {
-            withContext(kotlinx.coroutines.Dispatchers.IO) { store.apply(newConfig) }
+            val error = store.apply(newConfig)
+            if (error != null) {
+                _error.value = "Failed to apply settings: ${error.message}"
+                return@launch
+            }
             _messages.value = emptyList()
             _streamingText.value = null
             _reasoningText.value = null
@@ -92,9 +107,15 @@ class ChatViewModel(
         val reasoning = StringBuilder()
 
         generationJob = viewModelScope.launch {
+            val image = _attachedImage.value
             try {
                 sdk.stream(
                     text,
+                    images = if (image != null) {
+                        listOf(PromptProcessor.PromptAttachment(image, "image/jpeg"))
+                    } else {
+                        emptyList()
+                    },
                     options = GenerationOptions(
                         temperature = cfg.temperature,
                         topK = cfg.topK,
@@ -121,11 +142,14 @@ class ChatViewModel(
                         reasoning.toString().ifEmpty { null },
                     )
                 }
+                Log.d("EdgeDroid.Sample", "Answer (${answer.length}): ${answer}")
             } catch (t: Throwable) {
                 _error.value = t.message ?: "Generation failed"
+                Log.e("EdgeDroid.Sample", "Generation failed", t)
             } finally {
                 _streamingText.value = null
                 _reasoningText.value = null
+                clearImage()
             }
         }
     }

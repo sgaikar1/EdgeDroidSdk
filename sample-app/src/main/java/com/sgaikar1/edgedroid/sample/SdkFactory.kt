@@ -58,6 +58,9 @@ object SdkFactory {
         if (model.runtime == SampleRuntime.ONNX) {
             metadata["tokenizerPath"] = ensureOnnxTokenizer(context, model.id).absolutePath
         }
+        model.mmprojUrl?.let { mmprojUrl ->
+            metadata["mmprojPath"] = ensureMmproj(context, model.id, mmprojUrl).absolutePath
+        }
         return Model.remote(
             id = model.id,
             name = model.label,
@@ -66,6 +69,16 @@ object SdkFactory {
             format = model.format,
             metadata = metadata,
         )
+    }
+
+    /** Fetch the mmproj vision encoder alongside a vision-capable GGUF model. */
+    private fun ensureMmproj(context: Context, modelId: String, url: String): File {
+        val safe = modelId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val file = File(context.filesDir, "$safe-mmproj.gguf")
+        if (!file.exists()) {
+            HfHubClient.downloadTo(url, file)
+        }
+        return file
     }
 
     /** Bundled MiniLM tokenizer for the preset; for custom HF ONNX models fetch the repo's. */

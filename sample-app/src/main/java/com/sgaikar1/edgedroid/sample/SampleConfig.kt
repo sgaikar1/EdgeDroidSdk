@@ -15,6 +15,8 @@ data class SampleModel(
     val metadata: Map<String, String>,
     val chatCapable: Boolean,
     val embeddingCapable: Boolean,
+    val visionCapable: Boolean = false,
+    val mmprojUrl: String? = null,
 )
 
 object SampleModels {
@@ -40,6 +42,19 @@ object SampleModels {
             metadata = mapOf("template" to "raw"),
             chatCapable = false,
             embeddingCapable = true,
+        ),
+        SampleModel(
+            id = "SmolVLM-256M-Instruct",
+            label = "SmolVLM-256M Instruct (Q8_0, vision)",
+            runtime = SampleRuntime.LLAMA,
+            format = ModelFormat.GGUF,
+            url = "https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf",
+            sizeBytes = 175_054_528L,
+            mmprojUrl = "https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf",
+            metadata = mapOf("template" to "chatml"),
+            chatCapable = true,
+            embeddingCapable = false,
+            visionCapable = true,
         ),
     )
 

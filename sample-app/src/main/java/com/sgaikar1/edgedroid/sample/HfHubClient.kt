@@ -62,6 +62,22 @@ object HfHubClient {
         }
     }
 
+    /** Stream a (possibly large) file to disk without buffering it in memory. */
+    fun downloadTo(url: String, file: java.io.File) {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 30_000
+        conn.readTimeout = 60_000
+        try {
+            if (conn.responseCode != 200) {
+                throw RuntimeException("HTTP ${conn.responseCode} downloading $url")
+            }
+            file.parentFile?.mkdirs()
+            file.outputStream().use { out -> conn.inputStream.use { it.copyTo(out) } }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     private fun get(url: String): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 20_000

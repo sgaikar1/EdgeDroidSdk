@@ -28,11 +28,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sgaikar1.edgedroid.core.GpuConfig
+import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,9 +43,15 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
+                    val scope = rememberCoroutineScope()
                     SettingsScreen(store) { newConfig ->
-                        store.apply(newConfig)
-                        finish()
+                        scope.launch {
+                            val err = store.apply(newConfig)
+                            if (err != null) {
+                                android.util.Log.e("EdgeDroid.Settings", "apply failed: ${err.message}", err)
+                            }
+                            finish()
+                        }
                     }
                 }
             }
