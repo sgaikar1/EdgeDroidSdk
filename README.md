@@ -1,64 +1,87 @@
-# EdgeDroid SDK
+# EdgeDroid
 
-An on-device LLM SDK for Android, architected around a **runtime plugin SPI** so that
-llama.cpp is just one interchangeable backend — ExecuTorch, LiteRT, MNN or anything else can
-be added later as a new module with zero changes to the SDK core.
+**On-device LLMs for Android — one simple API, any inference engine.**
+
+EdgeDroid is a Kotlin SDK that runs large language models **fully on your device** — private,
+offline, free of server costs. It's built around a **runtime plugin SPI**, so llama.cpp is just
+one interchangeable backend: ExecuTorch, LiteRT, MNN or a brand-new runtime can be dropped in
+as a new module with **zero changes to the SDK core**.
+
+📦 **MIT License** · 🛰 **Maven Central** · 🤖 **minSdk 26**
 
 ```
-Android App
-   │
-LLM SDK (single Kotlin API)
-   │
-Runtime Registry
-   │
+Your Android App
+       │  one Kotlin API (EdgeDroid)
+       ▼
+   EdgeDroid SDK      ← owns downloads, storage, sessions, prompts,
+   (common/core/api)     streaming, threading, runtime selection
+       │
+ Runtime Registry + AUTO
+       ▼
 ┌────────┬─────────┬─────────┐
-│ llama  │ Exec    │ LiteRT  │   ← every runtime is a RuntimePlugin
+│ llama  │ ONNX    │ future  │   ← every runtime is a RuntimePlugin
 └────────┴─────────┴─────────┘
 ```
 
-The SDK owns **everything except inference**: downloads, storage, runtime selection, sessions,
-prompt rendering, threading, model formats. Developers never touch JNI, GGUF, paths, or
-runtime initialization.
+> The SDK owns **everything except inference**. You never touch JNI, GGUF, model paths, or
+> runtime initialization — you just talk to `EdgeDroid`.
 
-Published on **Maven Central** as `io.github.sgaikar1` (version `0.5.0`). SDK Kotlin footprint
-is ~170 KB; the llama.cpp AAR is ~3.9 MB (arm64 + x86_64).
+## ✨ Features
 
-## Installation
+- **llama.cpp** — GGUF chat models with **Vulkan GPU** (auto fallback to CPU)
+- **Image → text** 🖼️ — attach a photo, ask "what's in this picture?" (SmolVLM / LLaVA-style)
+- **ONNX Runtime** — embeddings, no-KV LLM generation, `pixel_values` vision
+- **Reliable downloads** — foreground service keeps big model downloads alive in the
+  background (progress notification + pause/resume + sha256 verification)
+- **Private/gated models** — auth headers for Hugging Face gated repos, Git LFS, corporate storage
+- **Compatibility check** — "can this device run this model?" before you download 500 MB
+- **Capability system** — streaming, vision, embeddings, tool-calling, JSON, grammar
+- **Sample app** with a **Hugging Face model browser**, runtime picker, and chat UI
 
-Add Maven Central (already present in most new Android projects) and the two dependencies
-you actually need:
+## 📦 Installation
+
+Add Maven Central (usually already present) and the dependencies you need:
 
 ```kotlin
 // settings.gradle.kts
 dependencyResolutionManagement {
-    repositories {
-        google()
-        mavenCentral()
-    }
+    repositories { google(); mavenCentral() }
 }
 ```
 
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("io.github.sgaikar1:edgedroid-api:0.5.0")
-    implementation("io.github.sgaikar1:runtime-llama:0.5.0") // or any other runtime plugin
+    implementation("io.github.sgaikar1:edgedroid-api:0.8.0")
+    implementation("io.github.sgaikar1:runtime-llama:0.8.0")   // llama.cpp
+    // or implementation("io.github.sgaikar1:runtime-onnx:0.8.0") // ONNX Runtime
 }
 ```
 
-> The `api`/`runtime` scopes in the POM pull in `edgedroid-core`, `edgedroid-common`,
-> `edgedroid-storage` and `edgedroid-download` transitively — you only declare these two.
-> Requires `minSdk 26`.
+> `edgedroid-core`, `-common`, `-storage` and `-download` are pulled in transitively —
+> you only declare the two coordinates above. Requires **minSdk 26**.
 
-## Quick start
+## 📦 Size
+
+The Kotlin SDK itself is tiny — the bulk is the native inference engine. An Android APK only
+ships the **one ABI** for the device, so the real on-device cost is about half the AAR's size.
+
+| Artifact | AAR (all ABIs) | Notes |
+| --- | --- | --- |
+| `edgedroid-common` / `core` / `api` / `storage` / `download` | ~0.2 MB total | pure Kotlin |
+| `runtime-llama` | ~39 MB | llama.cpp + Vulkan + vision (mmproj); ~30 MB per-ABI in an APK |
+| `runtime-onnx` | ~0.1 MB | ONNX Runtime `.so`s come from the onnxruntime-android dependency |
+
+A chat-only app adding `edgedroid-api` + `runtime-llama` adds roughly **~30 MB** to the APK.
+
+## 🚀 Quick start
 
 ```kotlin
-val sdk = LlmSdk.Builder(context)
-    .runtime(Runtime.plugin(LlamaPlugin()))     // register the llama.cpp runtime
+val sdk = EdgeDroid.Builder(context)
+    .runtime(Runtime.plugin(LlamaPlugin()))     // the llama.cpp runtime
     .model(
         Model.remote(
             id = "smollm2-135m",
-            name = "SmolLM2 135M Instruct (Q4_K_M)",
             url = "https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf",
             sizeBytes = 105_454_144L,
             metadata = mapOf("template" to "chatml"),
@@ -69,260 +92,137 @@ val sdk = LlmSdk.Builder(context)
     .download { maxRetries(3); timeout(60.seconds) }
     .build()
 
-// 1. Download the model (idempotent; you can observe progress — see below)
-sdk.models.download()
-
-// 2. Load it into the runtime (downloads first if missing)
-sdk.load()
-
-// 3. Stream a completion
+sdk.models.download()                      // download (progress optional)
+sdk.load()                                 // load into the runtime
 sdk.stream("Summarize this text") { token ->
-    print(token.text)  // tokens arrive as they are generated
+    print(token.text)                      // tokens as they're generated
 }
 ```
 
-## Builder configuration
+That's it — no JNI, no paths, no model format knowledge.
+
+## ⚙️ Builder configuration
 
 | Method | What it configures |
 | --- | --- |
-| `.runtime(spec)` | `Runtime.AUTO`, `Runtime.byId("llama")`, or `Runtime.plugin(...)` — how the runtime is selected |
-| `.model(model)` | The model to download/load (`Model.remote(...)` or `Model.local(path)`). Optional if you call `loadModel(File)` later |
-| `.threading { }` | `threads`, `batchThreads` — compute parallelism |
-| `.memory { }` | `contextSize`, `batchSize`, `mmap`, `gpu(...)` — context / memory / GPU budget |
-| `.download { }` | `maxRetries`, `connectTimeout`, `readTimeout`, `timeout`, `chunkBuffer` — downloader behaviour |
-| `.logging(provider)` | Plug in your logger via the `LogProvider` fun interface |
-| `.registerRuntime(plugin)` | Register an additional runtime before building |
+| `.runtime(spec)` | `Runtime.AUTO`, `Runtime.byId("llama")`, or `Runtime.plugin(...)` |
+| `.model(model)` | `Model.remote(...)` (download) or `Model.local(path)`. Optional if you call `loadModel(File)` later |
+| `.threading { }` | `threads`, `batchThreads` |
+| `.memory { }` | `contextSize`, `batchSize`, `mmap`, `gpu(...)` |
+| `.download { }` | `maxRetries`, `connectTimeout`, `readTimeout`, `timeout`, `chunkBuffer`, `foregroundService`, `notification`, `header(...)` |
+| `.extra(key, value)` | runtime-specific knobs (e.g. ONNX `executionProvider`) |
+| `.logging(provider)` | plug in your logger via the `LogProvider` interface |
+| `.registerRuntime(plugin)` | register another runtime |
 
-## GPU acceleration
-
-The SDK uses the **GPU automatically when a Vulkan device is available, otherwise CPU** —
-no configuration needed. On Android that's llama.cpp's Vulkan backend; it coexists with the
-CPU backend, which handles whatever layers aren't offloaded.
+## 💬 Generating text
 
 ```kotlin
-// Default — nothing to do:
-val sdk = LlmSdk.Builder(context).model(...).build()
-
-// Or be explicit:
-val sdk = LlmSdk.Builder(context)
-    .model(...)
-    .memory { gpu(GPU.AUTO) }          // detect Vulkan; offload all layers if present
-    .build()
-```
-
-| Policy | Behaviour |
-| --- | --- |
-| `GPU.AUTO` (default) | Offload all layers to the GPU when a Vulkan device is detected, else CPU |
-| `GPU.CPU` | Always CPU |
-| `GPU.ALL` | Offload all layers (falls back to CPU if loading fails) |
-| `GPU.Layers(n)` | Offload exactly `n` layers (0 = CPU) |
-
-How it works:
-
-- At runtime init the SDK asks llama.cpp how many GPU (Vulkan) devices were actually
-  enumerated — this is authoritative, not a guess from device properties.
-- If loading with GPU layers fails on a device with a broken driver, the SDK retries once
-  on CPU and logs a warning.
-- `sdk.models.checkCompatibility()` warns (`no_vulkan_gpu`) if you explicitly requested GPU
-  offload but the device reports no Vulkan support.
-
-## Private / gated models
-
-Attach auth headers to every download request for gated/private model files (Hugging Face
-gated repos, Git LFS, corporate storage):
-
-```kotlin
-val sdk = LlmSdk.Builder(context)
-    .model(Model.remote(id = "gated-model", url = "https://huggingface.co/…/model.gguf"))
-    .download {
-        header("Authorization", "Bearer hf_…")   // or headers(mapOf(...)) to replace
-    }
-    .build()
-```
-
-- Headers are sent on the **initial and resumed** requests, so pause/resume keeps auth.
-- They are **never logged or persisted** — they live only in `DownloadConfig` (not in
-  `Model.metadata` or `metadata.json`).
-- `header(k, v)` adds/overrides one entry; `headers(map)` replaces the whole set.
-- OkHttp strips `Authorization` on **cross-host redirects**; for hosts that redirect to a
-  signed CDN, put the token in the URL instead (`Model.downloadUrl` already supports that).
-
-## Checking device compatibility before downloading
-
-Ask the SDK whether this device can actually run the model **before** committing to a
-large download:
-
-```kotlin
-val report: CompatibilityReport = sdk.models.checkCompatibility()
-
-if (report.isDownloadable) {
-    sdk.models.download()   // proceed
-} else {
-    report.errors.forEach { showError(it.message) }   // e.g. "Not enough storage: need 1.2 GB, have 400 MB free."
-}
-```
-
-What is checked:
-
-| Check | Severity | Blocks? |
-| --- | --- | --- |
-| Free storage >= model size + 256 MB headroom | `ERROR` | Yes — download is refused before any network request |
-| A registered runtime supports the model format/capabilities | `ERROR` | Yes |
-| Model file present or has a `downloadUrl` | `ERROR` | Yes (load) |
-| Model large relative to device RAM | `WARNING` | No |
-| Runtime native ABI missing from `Build.SUPPORTED_ABIS` | `WARNING` | No |
-| CPU core count | `INFO` | No |
-
-The same check runs automatically again right before `load()` (hard errors throw a clear
-message instead of a late native crash), and `download()` fails fast with
-`ModelDownloadState.Failed(kind = "compatibility", …)` if it can never succeed.
-
-## Downloading with progress
-
-`download()` returns a cold `Flow<ModelDownloadState>` that already runs the download;
-collect it to observe state:
-
-```kotlin
-viewModelScope.launch {
-    sdk.models.download().collect { state ->
-        when (state) {
-            is ModelDownloadState.Downloading -> progressBar.progress = state.progress
-            is ModelDownloadState.Completed    -> onReady(state.localPath)
-            is ModelDownloadState.Failed       -> onError("${state.kind}: ${state.message}")
-            else -> Unit
-        }
-    }
-}
-```
-
-Downloads are manager-scoped: partial files survive interruption and resume via HTTP `Range`
-requests, and every file is verified against its `sha256` before it is stored. No storage
-permission is needed (everything lives under the app-private files dir).
-
-## Generating text
-
-Streaming (preferred for latency):
-
-```kotlin
+// Streaming (preferred for latency):
 val tokens: Flow<Token> = sdk.stream("Tell me a haiku")
 sdk.stream("Tell me a haiku") { token -> appendToUi(token.text) }
-```
 
-Non-streaming:
-
-```kotlin
+// Non-streaming:
 val answer: String = sdk.generate("Tell me a haiku", GenerationOptions(maxTokens = 512))
-```
 
-Generation options: `temperature`, `topK`, `topP`, `minP`, `maxTokens`, `repeatPenalty`,
-`seed`, `stopSequences`.
-
-Stop an in-flight generation:
-
-```kotlin
+// Options: temperature, topK, topP, minP, maxTokens, repeatPenalty, seed, stopSequences
+// Stop mid-generation:
 sdk.stop()
 ```
 
-## Error handling
-
-The SDK fails fast with explicit, catchable errors — never with native crashes.
-
-**Context window exceeded** (`0.3.0+`). If a rendered prompt (system prompt + history +
-your message) plus the requested `maxTokens` exceeds the configured `contextSize`, generation
-throws a `RuntimeException`:
-
-```
-prompt of 812 tokens exceeds the context window (n_ctx=2048, maxTokens=256)
-```
-
-Handle it by trimming the conversation and retrying:
-
-```kotlin
-try {
-    sdk.stream("Summarize this") { token -> /* … */ }
-} catch (e: RuntimeException) {
-    if (e.message?.contains("context window") == true) {
-        sdk.resetChat()                 // clear history (and system prompt)
-        sdk.systemPrompt = SHORT_PROMPT // optionally re-set a shorter prompt
-        // retry
-    }
-}
-```
-
-Tips for staying inside the window:
-- Use `.memory { contextSize(…) }` generously (prompt + `maxTokens` + 1 must fit).
-- Keep the `systemPrompt` concise; trim old history in long conversations (auto-trimming is
-  planned; for now call `resetChat()`).
-- A prompt alone is decoded in chunks and never crashes regardless of length — the limit is
-  the context window, not the batch size.
-
-**Load errors.** `load()` throws if the model cannot be loaded on this device (see
-[compatibility](#checking-device-compatibility-before-downloading)) or if the GGUF is invalid.
-
-**Download errors.** `download()` never throws — it emits `ModelDownloadState.Failed(kind, message)`:
-- `compatibility` — refused before any network request (e.g. insufficient storage).
-- `verification` — `sha256` mismatch after download (file discarded).
-- `network` / `io` / `http` — transport failures.
-
-```kotlin
-sdk.models.download().collect { state ->
-    when (state) {
-        is ModelDownloadState.Failed -> {
-            when (state.kind) {
-                "verification" -> notifyUser("Download corrupted; retrying…")
-                else -> notifyUser(state.message)
-            }
-        }
-        is ModelDownloadState.Completed -> startChat(state.localPath)
-        else -> Unit
-    }
-}
-```
-
-**Unsupported features.** Calls outside a runtime's declared capabilities (e.g. embeddings on
-the llama runtime) throw `UnsupportedOperationException`. Check `RuntimePlugin.capabilities` /
-`sdk.models.checkCompatibility(requiredCapabilities = …)` up front if you depend on them.
-
-## Using a model already on the device
-
-```kotlin
-val model: Model = sdk.loadModel(File("/storage/emulated/0/models/my-model.gguf"))
-```
-
-No download, no metadata required — the SDK adopts the file, records it, and loads it.
-
-## Sessions, system prompt, history
-
-The SDK keeps a chat session for you. Each `stream`/`generate` call appends the user turn and
-the assistant reply to history, so follow-ups have context:
+The SDK keeps a **chat session** for you — follow-ups have context:
 
 ```kotlin
 sdk.systemPrompt = "You are a concise assistant."
 sdk.stream("What is the capital of France?") { /* … */ }
 sdk.stream("And its population?") { /* … */ }   // has context
-
-sdk.resetChat()   // clear history + system prompt
+sdk.resetChat()                                  // clear history + system prompt
 ```
 
-## Managing models
+## 🖼️ Image → text
+
+Attach a photo and ask a vision-capable model (SmolVLM, LLaVA, etc.):
 
 ```kotlin
-sdk.models.available()          // List<Model> already stored on device
-sdk.models.resolve("smollm2-135m")
-sdk.models.delete("smollm2-135m")   // unloads + removes file + metadata
+sdk.generate(
+    "What is in this picture?",
+    images = listOf(PromptAttachment(bytes, "image/jpeg")),
+) { token -> /* … */ }
 ```
 
-## Observing SDK state
+- **llama.cpp**: the runtime loads the model's image encoder (`mmproj`) automatically when you
+  provide `Model.metadata["mmprojPath"]`; `PromptAttachment` flows into the vision pipeline.
+- **ONNX**: models with a `pixel_values` input get the decoded, normalized image tensor.
+- `checkCompatibility(requiredCapabilities = [VISION])` verifies the selected runtime supports it.
+
+## 🔢 Embeddings (ONNX)
 
 ```kotlin
-sdk.state.collect { state ->   // Idle → Loading → Ready → Generating …
-    when (state) { /* update UI */ }
+val sdk = EdgeDroid.Builder(context)
+    .runtime(Runtime.plugin(OnnxPlugin()))
+    .model(Model.remote(id = "minilm", url = "…/model_quantized.onnx", format = ModelFormat.ONNX,
+        metadata = mapOf("tokenizerPath" to "/path/to/tokenizer.json")))
+    .build()
+
+sdk.load()
+val v: FloatArray = sdk.embeddings("A cat sits on a mat.")   // 384-dim vector
+```
+
+## ⬇️ Downloads — even when the app is backgrounded
+
+Model downloads run in an SDK-provided **foreground service** (`dataSync`) with a progress
+notification + cancel action, so they survive backgrounding, Doze, and process reclamation.
+Partial files resume via HTTP `Range`; every file is sha256-verified.
+
+```kotlin
+sdk.models.download().collect { state ->
+    when (state) {
+        is ModelDownloadState.Downloading -> progressBar.progress = state.progress
+        is ModelDownloadState.Completed    -> onReady(state.localPath)
+        is ModelDownloadState.Failed       -> onError("${state.kind}: ${state.message}")
+        else -> Unit
+    }
 }
 ```
 
-## Adding a runtime (the whole point)
+- Add `POST_NOTIFICATIONS` (Android 13+) at runtime to see the notification; without it the
+  service still runs.
+- Configure it: `.download { foregroundService(false) }` or `.download { notification("my_channel", "Models", "Downloading") }`.
+- Calling `download()` on an already-downloaded model completes instantly (no network).
 
-Implement the SPI, ship it as a module, register it — nothing in the core changes:
+### Private / gated models
+
+```kotlin
+.download { header("Authorization", "Bearer hf_…") }   // or headers(mapOf(...))
+```
+
+Headers are sent on every request (including resumes), never logged or persisted. OkHttp
+strips `Authorization` on cross-host redirects — for CDN-redirecting hosts use a pre-signed URL.
+
+## 🩺 Check compatibility before you download
+
+```kotlin
+val report: CompatibilityReport = sdk.models.checkCompatibility()
+if (report.isDownloadable) sdk.models.download()
+else report.errors.forEach { showError(it.message) }
+```
+
+| Check | Blocks? |
+| --- | --- |
+| Free storage ≥ model size + 256 MB headroom | ✅ yes (before any network) |
+| A registered runtime supports the format/capabilities | ✅ yes |
+| Model present or has a `downloadUrl` | ✅ yes (load) |
+| Model large vs device RAM | ⚠️ warn |
+| Runtime ABI missing from the device | ⚠️ warn |
+| CPU core count | ℹ️ info |
+
+## 🧩 Runtimes
+
+| Runtime | Formats | Capabilities | Notes |
+| --- | --- | --- | --- |
+| `runtime-llama` | GGUF | STREAMING, VISION | CPU + Vulkan GPU auto-fallback, mmproj image→text |
+| `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM |
+
+**Add your own** — implement the SPI, register it, done:
 
 ```kotlin
 class ExecPlugin : RuntimePlugin {
@@ -331,128 +231,72 @@ class ExecPlugin : RuntimePlugin {
     override val capabilities = setOf(Capability.STREAMING)
     override suspend fun create(config: RuntimeConfig): Runtime = ExecRuntime(config)
 }
-
-sdk.registerRuntime(ExecPlugin())
-// or with Runtime.AUTO, a PTE model would now auto-select ExecPlugin
+sdk.registerRuntime(ExecPlugin())   // AUTO now routes PTE models to it
 ```
 
-`RuntimeSelectorTest` in `:edgedroid-api` proves AUTO selection dispatches purely on
-`RuntimePlugin` metadata. The SDK never checks `if (runtime == ...)`.
+No `if (runtime == ...)` anywhere — the SDK dispatches purely on plugin metadata.
 
-## Runtimes
+## 🎮 GPU acceleration
 
-| Runtime | Artifact | Formats | Capabilities | Notes |
-| --- | --- | --- | --- | --- |
-| llama.cpp | `runtime-llama` | GGUF | STREAMING | CPU + Vulkan GPU, auto fallback |
-| ONNX Runtime | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM generation |
+Automatic: **Vulkan GPU when available, otherwise CPU**. Override with `.memory { gpu(GPU.CPU) }`,
+`GPU.ALL`, or `GPU.Layers(n)`. The SDK detects real Vulkan devices at runtime and retries on CPU
+if a driver fails.
 
-Register any runtime (or several) and `Runtime.AUTO` picks by model format + capabilities:
+## 📱 Sample app
 
-```kotlin
-implementation("io.github.sgaikar1:runtime-onnx:0.7.0") // alongside or instead of runtime-llama
-```
+`sample-app/` is a Jetpack Compose demo that shows everything:
 
-**Embeddings** (ONNX runtime, e.g. an `all-MiniLM-L6-v2` int8 export):
+- **Runtime + model picker** (Settings screen) — llama.cpp / ONNX, with a **Hugging Face
+  model browser** to search and download any GGUF/ONNX model
+- **Chat** with live token streaming, a **Reasoning** area for thinking models, and a
+  **Thinking…** indicator
+- **Image attach** for vision models, **Embeddings** for ONNX, **Download / Load / Unload**,
+  compatibility check, creativity (temperature/top-p/top-k) and system prompt
 
-```kotlin
-val sdk = LlmSdk.Builder(context)
-    .runtime(Runtime.plugin(OnnxPlugin()))
-    .model(
-        Model.remote(
-            id = "minilm",
-            url = "…/model_quantized.onnx",
-            format = ModelFormat.ONNX,
-            metadata = mapOf("tokenizerPath" to "/path/to/tokenizer.json"),
-        ),
-    )
-    .build()
-
-sdk.load()
-val v: FloatArray = sdk.embeddings("A cat sits on a mat.")
-```
-
-**LLM generation** on ONNX uses a full-context autoregressive loop (temperature/top-k/top-p,
-EOS, `stop()`). It requires a **no-KV-cache export** — exports that demand a `past_key_values`
-sequence input throw a clear error, because the raw ONNX Runtime Java API cannot construct
-sequence tensors (that path needs ONNX Runtime GenAI).
-
-**Vision** — pass images to any `stream`/`generate` call; vision-capable runtimes consume them,
-text-only runtimes ignore them:
-
-```kotlin
-sdk.generate("What is in this picture?", images = listOf(PromptAttachment(bytes, "image/jpeg")))
-```
-
-On the ONNX runtime the first image is decoded, resized to the model's `pixel_values` shape
-(detected from the session inputs, default 224×224), normalized (ImageNet stats) and fed as a
-float tensor — so `pixel_values`-style vision models are wired end-to-end.
-
-`checkCompatibility(requiredCapabilities = [VISION])` verifies the selected runtime supports it.
-
-Runtime-specific knobs go through `extras` (e.g. ONNX execution provider):
-
-```kotlin
-LlmSdk.Builder(context).extra("executionProvider", "XNNPACK") // or "NNAPI"; default CPU
-```
-
-## Modules
-
-| Module | Package | Responsibility |
-| --- | --- | --- |
-| `:edgedroid-common` | `com.sgaikar1.edgedroid.common` | Tokens, options, results, log seam, formats |
-| `:edgedroid-core` | `com.sgaikar1.edgedroid.core` | **The SPI** — `Runtime`, `RuntimePlugin`, `LlmEngine`, `ChatSession`, `Downloader`, `ModelStorage`, `ModelProvider`, capabilities |
-| `:edgedroid-api` | `com.sgaikar1.edgedroid.api` | `LlmSdk` + builder, `RuntimeRegistry`, `RuntimeSelector` |
-| `:edgedroid-storage` | `com.sgaikar1.edgedroid.storage` | app-private layout + `metadata.json` |
-| `:edgedroid-download` | `com.sgaikar1.edgedroid.download` | OkHttp downloader with resume/verify |
-| `:runtime-llama` | `com.sgaikar1.edgedroid.runtime.llama` | llama.cpp (submodule) + JNI + `LlamaPlugin` |
-| `:sample-app` | `com.sgaikar1.edgedroid.sample` | Compose demo: download + streaming chat |
-
-`:edgedroid-core` has **zero native or network dependencies**. The only module that knows
-JNI/llama.cpp exists is `:runtime-llama`.
-
-## Storage layout (app-private, no permissions)
-
-```
-files/
-  models/     verified final models + metadata.json
-  downloads/  partial downloads (survive pause/resume via HTTP Range)
-  cache/      reusable artifacts
-  temp/       scratch
-```
-
-## Sample app
-
-`sample-app/` is a Jetpack Compose app that demonstrates the full flow: download with
-progress bar, load, streaming chat UI, stop and clear. Run it and press **Download → Load →
-Send**.
-
-## Building from source
+## 🔧 Building from source
 
 llama.cpp is a git submodule pinned at `b10285` under `runtime-llama/src/main/cpp/llama.cpp`.
-Built with Gradle NDK + CMake (**CPU + Vulkan GPU**, arm64-v8a + x86_64). The Vulkan backend
-compiles GLSL shaders at build time, which requires host tools on macOS:
+Native prerequisites (macOS):
 
-```
+```sh
 brew install shaderc spirv-headers vulkan-headers ninja
-```
-
-After cloning:
-
-```
 git submodule update --init --recursive
 ./gradlew :sample-app:assembleDebug
 ```
 
-### Publishing a new release
+Publishing a release (maintainers):
 
+```sh
+./gradlew publishAllPublicationsToMavenCentralRepository   # needs signing key + portal token
+git tag v0.8.0 && git push origin main --tags
 ```
-./gradlew publishAllPublicationsToMavenCentralRepository   # needs signingInMemoryKey + portal token
-git tag v0.1.1 && git push origin main --tags
-```
 
-## Requirements
+## 🗺️ Future scope & where you can help
 
-- Android Studio (AGP 8.13 / Gradle 8.13 / Kotlin 2.1.21)
-- JDK 17
-- NDK 28.x, SDK CMake 3.22.1 (only for building the native module)
-- minSdk 26
+EdgeDroid is early and the SPI is designed to make new work **additive**. These are the areas
+we want to grow — all great places to contribute:
+
+| Area | Details |
+| --- | --- |
+| **More runtimes** | ExecuTorch (PTE), LiteRT/TFLite, MNN — each is a new `RuntimePlugin` module, no core changes |
+| **ONNX LLM + KV cache** | raw-ORT generation is no-KV today; full KV-cache chat needs ONNX Runtime GenAI |
+| **Tool calling / function calling** | reserved `Capability.TOOL_CALLING`; runtime-agnostic tool loop + JSON parsing |
+| **Structured output / grammar** | `Capability.JSON_MODE` / `GRAMMAR` — llama.cpp grammar support is available but not wired |
+| **Smarter sessions** | auto-trim chat history to the context window instead of manual `resetChat()` |
+| **More chat templates** | ChatML, Qwen, Llama, raw exist — add Gemma, Mistral, Phi, etc. via `PromptProcessor` |
+| **Reasoning display** | the sample splits reasoning vs answer for `<|reasoning_start|>`/`think` models — more marker conventions welcome |
+| **iOS / KMP** | the SPI is platform-agnostic; a Kotlin Multiplatform port of common/core + a Metal runtime is the natural next step |
+| **Vision breadth** | more VLMs, batched images, per-model `pixel_values` params |
+| **Perf & GPU** | device-specific Vulkan tuning, better defaults, NNAPI/GPU delegates |
+
+Pick one, open an issue to discuss, and see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 🤝 Contributing
+
+EdgeDroid is open source — contributions are welcome! Bug fixes, docs, new runtimes, better
+sampling, chat templates, tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions,
+and the "add a runtime" walkthrough. Please read the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## ⚖️ License
+
+[MIT](LICENSE) © 2026 Santosh Gaikar. The bundled llama.cpp is also MIT-licensed.

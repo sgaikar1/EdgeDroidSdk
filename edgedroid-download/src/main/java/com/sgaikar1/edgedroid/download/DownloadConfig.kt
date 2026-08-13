@@ -3,7 +3,7 @@ package com.sgaikar1.edgedroid.download
 import kotlin.time.Duration
 
 /**
- * Downloader behaviour. Configured through `LlmSdk.Builder.download { ... }`.
+ * Downloader behaviour. Configured through `EdgeDroid.Builder.download { ... }`.
  *
  * [headers] are attached to every model download request (initial and resume). They are
  * never logged or persisted — set them in code, e.g. for gated models:

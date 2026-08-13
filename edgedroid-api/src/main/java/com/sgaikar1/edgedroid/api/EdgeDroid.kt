@@ -36,7 +36,7 @@ import java.io.File
  * The single entry point an Android developer sees. It owns everything except inference:
  * downloads, storage, runtime selection, sessions, streaming, threading.
  */
-class LlmSdk private constructor(
+class EdgeDroid private constructor(
     private val engine: SdkEngine,
     private val provider: ModelProvider,
     private val registry: RuntimeRegistry,
@@ -200,7 +200,7 @@ class LlmSdk private constructor(
         fun logging(provider: LogProvider): Builder = apply { this.logProvider = provider }
         fun registerRuntime(plugin: RuntimePlugin): Builder = apply { plugins.add(plugin) }
 
-        fun build(): LlmSdk {
+        fun build(): EdgeDroid {
             val log = logProvider
             val spec = runtimeSpec
             val paths = StoragePaths(appContext)
@@ -262,7 +262,7 @@ class LlmSdk private constructor(
             )
 
             log.log(LogProvider.Level.INFO, "EdgeDroid", "EdgeDroid SDK built")
-            return LlmSdk(engine, provider, registry, checker, log)
+            return EdgeDroid(engine, provider, registry, checker, log)
         }
     }
 

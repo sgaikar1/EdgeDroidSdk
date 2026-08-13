@@ -16,7 +16,7 @@ sealed interface LlmEngineState {
 
 /**
  * The SDK-facing orchestrator. Implemented inside the SDK; the app interacts with it through
- * [com.sgaikar1.edgedroid.api.LlmSdk]. It owns model resolution, download-on-demand, runtime
+ * [com.sgaikar1.edgedroid.api.EdgeDroid]. It owns model resolution, download-on-demand, runtime
  * selection and sessions so the app never does.
  */
 interface LlmEngine {

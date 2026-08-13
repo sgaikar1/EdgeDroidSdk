@@ -1,7 +1,7 @@
 package com.sgaikar1.edgedroid.sample
 
 import android.content.Context
-import com.sgaikar1.edgedroid.api.LlmSdk
+import com.sgaikar1.edgedroid.api.EdgeDroid
 import com.sgaikar1.edgedroid.common.ModelFormat
 import com.sgaikar1.edgedroid.core.GpuConfig
 import com.sgaikar1.edgedroid.core.LlmEngineState
@@ -17,7 +17,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * Owns the single active [LlmSdk] and the [SampleConfig] that produced it. Applying a new
+ * Owns the single active [EdgeDroid] and the [SampleConfig] that produced it. Applying a new
  * config rebuilds the SDK (unloading the previous one) — the chat/embedding UI always talks
  * to [sdk] and observes the current engine state via [sdkState]. The config is persisted so a
  * process restart restores the last selection.
@@ -38,7 +38,7 @@ class SampleStore(private val context: Context) {
     val downloadedIds: StateFlow<Set<String>> = _downloadedIds.asStateFlow()
 
     @Volatile
-    var sdk: LlmSdk = SdkFactory.build(appContext, _config.value)
+    var sdk: EdgeDroid = SdkFactory.build(appContext, _config.value)
         private set
 
     private var stateJob: Job? = null

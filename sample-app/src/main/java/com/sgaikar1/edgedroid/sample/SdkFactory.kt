@@ -2,7 +2,7 @@ package com.sgaikar1.edgedroid.sample
 
 import android.content.Context
 import android.util.Log
-import com.sgaikar1.edgedroid.api.LlmSdk
+import com.sgaikar1.edgedroid.api.EdgeDroid
 import com.sgaikar1.edgedroid.api.Runtime
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.core.Model
@@ -12,7 +12,7 @@ import java.io.File
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Builds an [LlmSdk] from a [SampleConfig] — runtime, model, threading, memory/GPU,
+ * Builds an [EdgeDroid] from a [SampleConfig] — runtime, model, threading, memory/GPU,
  * ONNX execution provider and download options all come from the UI.
  */
 object SdkFactory {
@@ -23,9 +23,9 @@ object SdkFactory {
         }
     }
 
-    fun build(context: Context, config: SampleConfig): LlmSdk {
+    fun build(context: Context, config: SampleConfig): EdgeDroid {
         val model = config.model
-        val builder = LlmSdk.Builder(context)
+        val builder = EdgeDroid.Builder(context)
             .runtime(
                 Runtime.plugin(
                     if (model.runtime == SampleRuntime.LLAMA) LlamaPlugin() else OnnxPlugin(),

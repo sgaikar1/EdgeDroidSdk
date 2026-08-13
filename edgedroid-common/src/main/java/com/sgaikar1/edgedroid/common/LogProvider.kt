@@ -2,7 +2,7 @@ package com.sgaikar1.edgedroid.common
 
 /**
  * Logging seam. The SDK is dependency-free on any logger; the app can plug one in via the
- * builder ([com.sgaikar1.edgedroid.api.LlmSdk.Builder.logging]).
+ * builder ([com.sgaikar1.edgedroid.api.EdgeDroid.Builder.logging]).
  */
 interface LogProvider {
     fun log(level: Level, tag: String, message: String, throwable: Throwable?)
