@@ -27,6 +27,9 @@ class SampleStore(private val context: Context) {
     private val _sdkState = MutableStateFlow<LlmEngineState>(LlmEngineState.Idle)
     val sdkState: StateFlow<LlmEngineState> = _sdkState.asStateFlow()
 
+    private val _downloadedIds = MutableStateFlow<Set<String>>(emptySet())
+    val downloadedIds: StateFlow<Set<String>> = _downloadedIds.asStateFlow()
+
     @Volatile
     var sdk: LlmSdk = SdkFactory.build(context.applicationContext, _config.value)
         private set
@@ -35,6 +38,7 @@ class SampleStore(private val context: Context) {
 
     init {
         subscribeState()
+        refreshDownloaded()
     }
 
     fun apply(newConfig: SampleConfig) {
@@ -43,7 +47,16 @@ class SampleStore(private val context: Context) {
         sdk = SdkFactory.build(context.applicationContext, newConfig)
         sdk.systemPrompt = newConfig.systemPrompt
         subscribeState()
+        refreshDownloaded()
         scope.launch { runCatching { old.unload() } }
+    }
+
+    /** Recompute which configured models are actually on device (file exists). */
+    fun refreshDownloaded() {
+        _downloadedIds.value = sdk.models.available()
+            .filter { model -> model.localPath?.let { java.io.File(it).exists() } == true }
+            .map { it.id }
+            .toSet()
     }
 
     private fun subscribeState() {

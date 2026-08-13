@@ -56,7 +56,7 @@ object SdkFactory {
     private fun modelToSdkModel(context: Context, model: SampleModel, config: SampleConfig): Model {
         val metadata = model.metadata.toMutableMap()
         if (model.runtime == SampleRuntime.ONNX) {
-            metadata["tokenizerPath"] = ensureTokenizerAsset(context).absolutePath
+            metadata["tokenizerPath"] = ensureOnnxTokenizer(context, model.id).absolutePath
         }
         return Model.remote(
             id = model.id,
@@ -68,13 +68,17 @@ object SdkFactory {
         )
     }
 
-    /** Copies the bundled MiniLM tokenizer next to the ONNX model once. */
-    private fun ensureTokenizerAsset(context: Context): File {
-        val file = File(context.filesDir, "all-minilm-tokenizer.json")
+    /** Bundled MiniLM tokenizer for the preset; for custom HF ONNX models fetch the repo's. */
+    private fun ensureOnnxTokenizer(context: Context, modelId: String): File {
+        val safe = modelId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val file = File(context.filesDir, "$safe-tokenizer.json")
         if (!file.exists()) {
-            context.assets.open("all-minilm-tokenizer.json").use { input ->
-                file.outputStream().use { output -> input.copyTo(output) }
+            val source = if (modelId == "all-minilm-l6-v2") {
+                context.assets.open("all-minilm-tokenizer.json").use { it.readBytes() }
+            } else {
+                HfHubClient.fetchBytes(HfHubClient.resolveUrl(modelId, "tokenizer.json"))
             }
+            file.writeBytes(source)
         }
         return file
     }

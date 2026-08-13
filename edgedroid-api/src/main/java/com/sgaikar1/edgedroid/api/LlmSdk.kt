@@ -221,11 +221,17 @@ class LlmSdk private constructor(
             )
 
             // Fail fast before touching the network if the download cannot possibly succeed.
-            val downloader = DownloadManager(storage, downloadConfig.build(), log) { model ->
-                checker.check(model).errors.firstOrNull()?.let {
-                    ModelDownloadState.Failed(kind = it.code, message = it.message)
-                }
-            }
+            val downloader = DownloadManager(
+                storage = storage,
+                config = downloadConfig.build(),
+                log = log,
+                preflight = { model ->
+                    checker.check(model).errors.firstOrNull()?.let {
+                        ModelDownloadState.Failed(kind = it.code, message = it.message)
+                    }
+                },
+                context = appContext,
+            )
 
             val provider = InternalModelProvider(storage, downloader, log)
             val runtimeConfig = RuntimeConfig(

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ChatMessage(
     val role: String,
@@ -53,18 +54,27 @@ class ChatViewModel(
     private val _embeddingResult = MutableStateFlow<String?>(null)
     val embeddingResult: StateFlow<String?> = _embeddingResult.asStateFlow()
 
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError: StateFlow<String?> = _downloadError.asStateFlow()
+
     val engineState: StateFlow<LlmEngineState> = store.sdkState
+
+    val downloadedIds: StateFlow<Set<String>> = store.downloadedIds
 
     private var generationJob: Job? = null
 
+    fun isDownloaded(modelId: String): Boolean = modelId in store.downloadedIds.value
+
     fun applyConfig(newConfig: SampleConfig) {
-        store.apply(newConfig)
-        _messages.value = emptyList()
-        _streamingText.value = null
-        _reasoningText.value = null
-        _embeddingResult.value = null
-        _compatibility.value = null
-        _error.value = null
+        viewModelScope.launch {
+            withContext(kotlinx.coroutines.Dispatchers.IO) { store.apply(newConfig) }
+            _messages.value = emptyList()
+            _streamingText.value = null
+            _reasoningText.value = null
+            _embeddingResult.value = null
+            _compatibility.value = null
+            _error.value = null
+        }
     }
 
     // ---- chat ----
@@ -174,20 +184,27 @@ class ChatViewModel(
     fun downloadModel() {
         viewModelScope.launch {
             _downloadProgress.value = 0f
+            _downloadError.value = null
             sdk.models.download().collect { state ->
                 when (state) {
                     is ModelDownloadState.Downloading -> _downloadProgress.value = state.progress
                     is ModelDownloadState.Completed -> {
                         _downloadProgress.value = 1f
+                        store.refreshDownloaded()
                         loadModel()
                     }
-                    is ModelDownloadState.Failed -> _error.value = "Download failed: ${state.message}"
+                    is ModelDownloadState.Failed -> {
+                        _downloadProgress.value = null
+                        _downloadError.value = "Download failed (${state.kind}): ${state.message}"
+                    }
                     is ModelDownloadState.Cancelled -> _downloadProgress.value = null
                     else -> Unit
                 }
             }
         }
     }
+
+    fun retryDownload() = downloadModel()
 
     fun loadModel() {
         viewModelScope.launch {
@@ -199,6 +216,16 @@ class ChatViewModel(
                 _error.value = t.message ?: "Failed to load model"
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+
+    fun unloadModel() {
+        viewModelScope.launch {
+            try {
+                sdk.unload()
+            } catch (t: Throwable) {
+                _error.value = t.message ?: "Failed to unload model"
             }
         }
     }

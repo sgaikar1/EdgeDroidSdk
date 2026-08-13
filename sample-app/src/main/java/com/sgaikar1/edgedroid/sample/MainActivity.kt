@@ -1,9 +1,16 @@
 package com.sgaikar1.edgedroid.sample
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,18 +24,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,12 +42,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.sgaikar1.edgedroid.core.GpuConfig
+import com.sgaikar1.edgedroid.core.LlmEngineState
 
 class MainActivity : ComponentActivity() {
 
@@ -67,6 +70,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ChatScreen(viewModel: ChatViewModel) {
+    val context = LocalContext.current
     val config by viewModel.config.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
@@ -77,9 +81,27 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val error by viewModel.error.collectAsStateWithLifecycle()
     val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
     val embeddingResult by viewModel.embeddingResult.collectAsStateWithLifecycle()
+    val downloadError by viewModel.downloadError.collectAsStateWithLifecycle()
+    val downloadedIds by viewModel.downloadedIds.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     var input by remember { mutableStateOf("") }
+
+    // Ask for notification permission so the download foreground service can show progress.
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    val downloaded = config.model.id in downloadedIds
+    val isReady = engineState == LlmEngineState.Ready
 
     LaunchedEffect(messages.size, streamingText) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
@@ -92,17 +114,25 @@ fun ChatScreen(viewModel: ChatViewModel) {
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
-        Text(
-            text = "Runtime: ${config.runtime} · Model: ${config.model.label} · State: ${engineState}",
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-        )
 
-        SettingsPanel(
-            config = config,
-            onApply = viewModel::applyConfig,
-        )
+        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Runtime: ${config.runtime} · ${config.model.label}", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "State: ${engineState} · Temp ${"%.2f".format(config.temperature)} · top-p ${"%.2f".format(config.topP)} · top-k ${config.topK}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                TextButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
+                    Text("Settings")
+                }
+            }
+        }
 
         error?.let {
             Text(
@@ -116,11 +146,16 @@ fun ChatScreen(viewModel: ChatViewModel) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(onClick = { viewModel.downloadModel() }, enabled = progress == null) {
-                Text("Download")
+            if (!downloaded) {
+                Button(onClick = { viewModel.downloadModel() }, enabled = progress == null) {
+                    Text("Download")
+                }
             }
-            Button(onClick = { viewModel.loadModel() }, enabled = !isLoading) {
-                Text(if (isLoading) "Loading…" else "Load")
+            Button(
+                onClick = { if (isReady) viewModel.unloadModel() else viewModel.loadModel() },
+                enabled = downloaded && !isLoading,
+            ) {
+                Text(if (isReady) "Unload" else if (isLoading) "Loading…" else "Load")
             }
             TextButton(onClick = { viewModel.checkCompatibility() }) { Text("Check") }
             if (config.model.embeddingCapable) {
@@ -130,8 +165,20 @@ fun ChatScreen(viewModel: ChatViewModel) {
             TextButton(onClick = { viewModel.clear() }) { Text("Clear") }
         }
 
-        embeddingResult?.let {
-            Text(text = it, style = MaterialTheme.typography.bodySmall)
+        embeddingResult?.let { Text(text = it, style = MaterialTheme.typography.bodySmall) }
+        downloadError?.let { err ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = err,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { viewModel.retryDownload() }) { Text("Retry") }
+            }
         }
         compatibility?.let {
             Text(
@@ -167,7 +214,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 item { MessageBubble(ChatMessage("assistant", current)) }
             }
             item {
-                if (isLoading || (engineState == com.sgaikar1.edgedroid.core.LlmEngineState.Generating &&
+                if (isLoading || (engineState == LlmEngineState.Generating &&
                         streamingText == null && reasoningText == null)
                 ) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -207,177 +254,10 @@ fun ChatScreen(viewModel: ChatViewModel) {
         }
         if (!config.model.chatCapable) {
             Text(
-                text = "This model is embeddings-only — chat is disabled for the ONNX all-MiniLM preset.",
+                text = "This model is embeddings-only — chat is disabled.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
             )
-        }
-    }
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun SettingsPanel(config: SampleConfig, onApply: (SampleConfig) -> Unit) {
-    var draft by remember { mutableStateOf(config) }
-    var expanded by remember { mutableStateOf(false) }
-    LaunchedEffect(config) { draft = config }
-
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Runtime: ${draft.runtime} · Model: ${draft.model.label}", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "Temp ${"%.2f".format(draft.temperature)} · top-p ${"%.2f".format(draft.topP)} · top-k ${draft.topK}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "Hide settings" else "Settings")
-                }
-                Button(onClick = { onApply(draft) }) { Text("Apply") }
-            }
-
-            if (expanded) {
-                Column(
-                    modifier = Modifier
-                        .padding(top = 8.dp)
-                        .verticalScroll(rememberScrollState())
-                        .height(380.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        DropdownBox(
-                            label = "Runtime",
-                            selected = draft.runtime.name,
-                            options = SampleRuntime.entries.map { it.name },
-                            modifier = Modifier.weight(1f),
-                        ) { choice ->
-                            draft = draft.withRuntime(SampleRuntime.valueOf(choice))
-                        }
-                        DropdownBox(
-                            label = "Model",
-                            selected = draft.model.label,
-                            options = SampleModels.forRuntime(draft.runtime).map { it.label },
-                            modifier = Modifier.weight(1.2f),
-                        ) { label ->
-                            val model = SampleModels.forRuntime(draft.runtime).first { it.label == label }
-                            draft = draft.copy(modelId = model.id)
-                        }
-                    }
-
-                    SliderRow("Threads", draft.threads.toFloat(), 1f..8f, 7) { draft = draft.copy(threads = it.toInt()) }
-
-                    if (draft.runtime == SampleRuntime.LLAMA) {
-                        SliderRow("Context size", draft.contextSize.toFloat(), 512f..4096f, 7) {
-                            draft = draft.copy(contextSize = it.toInt())
-                        }
-                        DropdownBox(
-                            label = "GPU",
-                            selected = when (draft.gpu) {
-                                is GpuConfig.Auto -> "AUTO"
-                                is GpuConfig.Cpu -> "CPU"
-                                is GpuConfig.All -> "ALL"
-                                is GpuConfig.Layers -> "LAYERS"
-                            },
-                            options = listOf("AUTO", "CPU", "ALL"),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { choice ->
-                            draft = draft.copy(
-                                gpu = when (choice) {
-                                    "CPU" -> GpuConfig.Cpu
-                                    "ALL" -> GpuConfig.All
-                                    else -> GpuConfig.Auto
-                                },
-                            )
-                        }
-                    } else {
-                        DropdownBox(
-                            label = "Execution provider",
-                            selected = draft.executionProvider ?: "CPU",
-                            options = listOf("NNAPI", "XNNPACK", "CPU"),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { choice ->
-                            draft = draft.copy(executionProvider = if (choice == "CPU") null else choice)
-                        }
-                    }
-
-                    Text("Creativity", style = MaterialTheme.typography.labelMedium)
-                    SliderRow("Temperature", draft.temperature, 0f..1.5f, 15) { draft = draft.copy(temperature = it) }
-                    SliderRow("Top-p", draft.topP, 0.5f..1f, 10) { draft = draft.copy(topP = it) }
-                    SliderRow("Top-k", draft.topK.toFloat(), 1f..200f, 39) { draft = draft.copy(topK = it.toInt()) }
-
-                    OutlinedTextField(
-                        value = draft.systemPrompt,
-                        onValueChange = { draft = draft.copy(systemPrompt = it) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("System prompt (applies on Apply)") },
-                        minLines = 2,
-                        maxLines = 3,
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SliderRow("Retries", draft.maxRetries.toFloat(), 0f..5f, 5, Modifier.weight(1f)) {
-                            draft = draft.copy(maxRetries = it.toInt())
-                        }
-                        SliderRow("Timeout (s)", draft.downloadTimeoutSeconds.toFloat(), 10f..300f, 29, Modifier.weight(1f)) {
-                            draft = draft.copy(downloadTimeoutSeconds = it.toLong())
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SliderRow(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    modifier: Modifier = Modifier,
-    onChange: (Float) -> Unit,
-) {
-    Column(modifier = modifier) {
-        Text("$label: ${if (value % 1f == 0f) value.toInt() else "%.2f".format(value)}", style = MaterialTheme.typography.bodySmall)
-        Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps)
-    }
-}
-
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun DropdownBox(
-    label: String,
-    selected: String,
-    options: List<String>,
-    modifier: Modifier = Modifier,
-    onSelect: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
-        OutlinedTextField(
-            value = selected,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(option) },
-                    onClick = {
-                        onSelect(option)
-                        expanded = false
-                    },
-                )
-            }
         }
     }
 }
@@ -386,9 +266,7 @@ private fun DropdownBox(
 fun ThinkingBubble(reasoning: String) {
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
         Card(
-            colors = androidx.compose.material3.CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            ),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(12.dp)) {
