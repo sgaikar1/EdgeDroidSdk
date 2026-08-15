@@ -25,8 +25,10 @@ android {
 dependencies {
     implementation(project(":edgedroid-common"))
     implementation(project(":edgedroid-core"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)

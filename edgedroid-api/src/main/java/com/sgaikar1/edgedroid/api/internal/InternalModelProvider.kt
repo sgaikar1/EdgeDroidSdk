@@ -24,7 +24,7 @@ internal class InternalModelProvider(
 
     override suspend fun getLocalPath(model: Model): String {
         if (storage.isDownloaded(model)) {
-            // Adopted local models record the exact file path; honor it (LlmSdk.loadModel(file)).
+            // Adopted local models record the exact file path; honor it (EdgeDroid.loadModel(file)).
             val recorded = storage.resolve(model.id)?.metadata?.get("localPath")
             if (!recorded.isNullOrBlank() && File(recorded).isFile) {
                 log.log(LogProvider.Level.DEBUG, TAG, "Model '${model.id}' is an adopted local file at $recorded")

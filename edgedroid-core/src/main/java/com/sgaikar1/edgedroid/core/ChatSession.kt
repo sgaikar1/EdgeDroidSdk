@@ -9,7 +9,7 @@ interface ChatSession {
     val history: List<PromptProcessor.Message>
     var systemPrompt: String?
 
-    fun addUserMessage(text: String)
+    fun addUserMessage(text: String, images: List<PromptProcessor.PromptAttachment> = emptyList())
     fun addAssistantMessage(text: String)
     fun reset()
 

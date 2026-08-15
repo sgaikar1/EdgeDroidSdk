@@ -31,6 +31,12 @@ target_include_directories(edgedroid_llama PRIVATE
 
 target_link_libraries(edgedroid_llama PRIVATE llama)
 
+# Vision (mtmd): link the multimodal library for mmproj image->text support.
+if (TARGET mtmd)
+    target_include_directories(edgedroid_llama PRIVATE llama.cpp/tools/mtmd)
+    target_link_libraries(edgedroid_llama PRIVATE mtmd)
+endif()
+
 find_library(log-lib log)
 target_link_libraries(edgedroid_llama PRIVATE ${log-lib})
 

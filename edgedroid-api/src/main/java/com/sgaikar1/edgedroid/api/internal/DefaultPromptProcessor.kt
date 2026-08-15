@@ -45,13 +45,14 @@ internal class DefaultPromptProcessor : PromptProcessor {
         messages.dropLast(1).forEach { m ->
             prefix.append("<|im_start|>${m.role.tag()}\n").append(m.content).append("<|im_end|>\n")
         }
+        val attachments = messages.flatMap { it.images }
         val last = messages.lastOrNull()
         if (last != null) {
             prefix.append("<|im_start|>${last.role.tag()}\n")
             val body = last.content + "<|im_end|>\n<|im_start|>assistant\n"
-            return PromptProcessor.PromptParts(prefix.toString(), body)
+            return PromptProcessor.PromptParts(prefix.toString(), body, attachments)
         }
-        return PromptProcessor.PromptParts(prefix.toString(), "<|im_start|>assistant\n")
+        return PromptProcessor.PromptParts(prefix.toString(), "<|im_start|>assistant\n", attachments)
     }
 
     private fun llama3Parts(
@@ -65,13 +66,14 @@ internal class DefaultPromptProcessor : PromptProcessor {
         messages.dropLast(1).forEach { m ->
             prefix.append("<|start_header_id|>${m.role.tag()}<|end_header_id|>\n\n").append(m.content).append("<|eot_id|>")
         }
+        val attachments = messages.flatMap { it.images }
         val last = messages.lastOrNull()
         if (last != null) {
             prefix.append("<|start_header_id|>${last.role.tag()}<|end_header_id|>\n\n")
             val body = last.content + "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-            return PromptProcessor.PromptParts(prefix.toString(), body)
+            return PromptProcessor.PromptParts(prefix.toString(), body, attachments)
         }
-        return PromptProcessor.PromptParts(prefix.toString(), "<|start_header_id|>assistant<|end_header_id|>\n\n")
+        return PromptProcessor.PromptParts(prefix.toString(), "<|start_header_id|>assistant<|end_header_id|>\n\n", attachments)
     }
 
     private fun rawParts(
@@ -83,12 +85,13 @@ internal class DefaultPromptProcessor : PromptProcessor {
         messages.dropLast(1).forEach { m ->
             prefix.append(m.role.tag().replaceFirstChar { it.uppercase() }).append(": ").append(m.content).append("\n")
         }
+        val attachments = messages.flatMap { it.images }
         val last = messages.lastOrNull()
         if (last != null) {
             prefix.append("User: ")
-            return PromptProcessor.PromptParts(prefix.toString(), last.content + "\nAssistant: ")
+            return PromptProcessor.PromptParts(prefix.toString(), last.content + "\nAssistant: ", attachments)
         }
-        return PromptProcessor.PromptParts(prefix.toString(), "Assistant: ")
+        return PromptProcessor.PromptParts(prefix.toString(), "Assistant: ", attachments)
     }
 
     private fun buildChatML(

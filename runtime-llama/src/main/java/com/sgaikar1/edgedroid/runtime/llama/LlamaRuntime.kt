@@ -64,6 +64,14 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
         }
         if (handle == 0L) throw RuntimeException("Failed to load model at $path")
         _state.value = RuntimeState.ModelLoaded
+        val mmproj = model.metadata["mmprojPath"]
+        if (!mmproj.isNullOrBlank()) {
+            val ok = withContext(Dispatchers.Default) {
+                NativeLlama.nativeLoadVisionModel(handle, mmproj, options.threading.threads)
+            }
+            if (!ok) throw RuntimeException("Failed to load mmproj vision model at $mmproj")
+            config.log.log(LogProvider.Level.INFO, TAG, "Vision (mmproj) loaded from $mmproj")
+        }
         return handle
     }
 
@@ -96,22 +104,45 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
             index++
         }
         withContext(Dispatchers.Default) {
-            // Cache the (constant) system-prefix KV once; only the per-call body is re-decoded.
-            if (!NativeLlama.nativeSetPrefix(handle, prompt.prefix)) {
-                throw IllegalStateException("Failed to cache prompt prefix")
+            val image = prompt.attachments.firstOrNull()
+            if (image != null) {
+                // Vision path: the text must contain the <image> marker; insert it if absent.
+                val rendered = if (prompt.render().contains("<image>")) {
+                    prompt.render()
+                } else {
+                    prompt.prefix + "<image>\n" + prompt.body
+                }
+                NativeLlama.nativeGenerateVision(
+                    handle = handle,
+                    prompt = rendered,
+                    imageBytes = image.bytes,
+                    temperature = options.temperature,
+                    topK = options.topK,
+                    topP = options.topP,
+                    minP = options.minP,
+                    maxTokens = options.maxTokens,
+                    repeatPenalty = options.repeatPenalty,
+                    seed = options.seed,
+                    callback = callback,
+                )
+            } else {
+                // Cache the (constant) system-prefix KV once; only the per-call body is re-decoded.
+                if (!NativeLlama.nativeSetPrefix(handle, prompt.prefix)) {
+                    throw IllegalStateException("Failed to cache prompt prefix")
+                }
+                NativeLlama.nativeGenerate(
+                    handle = handle,
+                    body = prompt.body,
+                    temperature = options.temperature,
+                    topK = options.topK,
+                    topP = options.topP,
+                    minP = options.minP,
+                    maxTokens = options.maxTokens,
+                    repeatPenalty = options.repeatPenalty,
+                    seed = options.seed,
+                    callback = callback,
+                )
             }
-            NativeLlama.nativeGenerate(
-                handle = handle,
-                body = prompt.body,
-                temperature = options.temperature,
-                topK = options.topK,
-                topP = options.topP,
-                minP = options.minP,
-                maxTokens = options.maxTokens,
-                repeatPenalty = options.repeatPenalty,
-                seed = options.seed,
-                callback = callback,
-            )
         }
         close()
     }

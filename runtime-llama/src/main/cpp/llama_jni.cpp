@@ -15,6 +15,8 @@
 #include <ctime>
 
 #include "llama.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 #define TAG "EdgeDroid.LlamaJNI"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -23,7 +25,10 @@ struct LlamaSession {
     llama_model* model = nullptr;
     llama_context* ctx = nullptr;
     int32_t n_batch = 256;
+    int32_t n_threads = 4;
     std::atomic<bool> stop{false};
+    // Vision (mmproj) context — loaded when a vision model is used.
+    mtmd_context* mm = nullptr;
     // Cached KV prefix (system prompt + user opener). Decoded once, reused across calls.
     std::vector<llama_token> cached_prefix;
     bool prefix_valid = false;
@@ -71,6 +76,57 @@ static LlamaSession* remove_session(jlong handle) {
 static void jni_throw(JNIEnv* env, const char* message) {
     jclass ex = env->FindClass("java/lang/RuntimeException");
     env->ThrowNew(ex, message);
+}
+
+// Lenient UTF-8 -> UTF-16 conversion for JNI. Byte-fallback tokenizers (e.g. Qwen3, GPT-2
+// style) can split one multi-byte character across two tokens, so a single piece may hold a
+// truncated/invalid UTF-8 sequence. NewStringUTF would abort on that; NewString() does not
+// validate, and malformed bytes are replaced with U+FFFD so streaming never crashes.
+static jstring to_jstring(JNIEnv* env, const char* data, size_t len) {
+    std::vector<jchar> out;
+    out.reserve(len);
+    size_t i = 0;
+    while (i < len) {
+        const unsigned char c = (unsigned char) data[i];
+        uint32_t cp = 0;
+        int extra = 0;
+        if (c < 0x80) {
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F; extra = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F; extra = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07; extra = 3;
+        } else {
+            out.push_back(0xFFFD);
+            i++;
+            continue;
+        }
+        bool valid = i + extra < len;
+        for (int k = 1; valid && k <= extra; ++k) {
+            const unsigned char cc = (unsigned char) data[i + k];
+            if ((cc & 0xC0) != 0x80) {
+                valid = false;
+            } else {
+                cp = (cp << 6) | (cc & 0x3F);
+            }
+        }
+        if (!valid) {
+            out.push_back(0xFFFD);
+            i++;
+            continue;
+        }
+        i += extra + 1;
+        if (cp >= 0x10000 && cp <= 0x10FFFF) {
+            cp -= 0x10000;
+            out.push_back((jchar)(0xD800 | (cp >> 10)));
+            out.push_back((jchar)(0xDC00 | (cp & 0x3FF)));
+        } else {
+            out.push_back((jchar) cp);
+        }
+    }
+    return env->NewString(out.data(), (jsize) out.size());
 }
 
 // Decodes tokens into the KV cache at explicit positions [base, base+n). Positions are
@@ -152,10 +208,16 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
     cparams.n_threads = nThreads;
     cparams.n_threads_batch = nThreadsBatch;
 
+    g_last_error.clear();
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
+        std::string message = "failed to create context";
+        if (!g_last_error.empty()) {
+            message += ": " + g_last_error;
+        }
         llama_model_free(model);
-        jni_throw(env, "failed to create context");
+        LOGE("%s", message.c_str());
+        jni_throw(env, message.c_str());
         return 0L;
     }
 
@@ -163,6 +225,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
     session->model = model;
     session->ctx = ctx;
     session->n_batch = nBatch > 0 ? nBatch : 256;
+    session->n_threads = nThreads > 0 ? nThreads : 4;
 
     jlong handle = reinterpret_cast<jlong>(session);
     register_session(handle, session);
@@ -323,8 +386,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
 
         int32_t np = llama_token_to_piece(vocab, id, piece, (int32_t) sizeof(piece), 0, false);
         if (np > 0) {
-            std::string piece_str(piece, (size_t) np);
-            jstring jPiece = env->NewStringUTF(piece_str.c_str());
+            jstring jPiece = to_jstring(env, piece, (size_t) np);
             env->CallVoidMethod(callback, onToken, jPiece);
             env->DeleteLocalRef(jPiece);
         }
@@ -340,6 +402,148 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     llama_sampler_free(smpl);
 }
 
+// Load the mmproj vision encoder (image->embeddings) for a vision-capable model.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadVisionModel(
+        JNIEnv* env, jobject, jlong handle, jstring jMmproj, jint nThreads) {
+
+    LlamaSession* s = lookup_session(handle);
+    if (!s || !s->model || !s->ctx) {
+        jni_throw(env, "model not loaded");
+        return JNI_FALSE;
+    }
+    const char* path = env->GetStringUTFChars(jMmproj, nullptr);
+    if (!path) return JNI_FALSE;
+
+    if (s->mm) {
+        mtmd_free(s->mm);
+        s->mm = nullptr;
+    }
+    mtmd_context_params params = mtmd_context_params_default();
+    params.use_gpu = false;
+    params.n_threads = nThreads > 0 ? nThreads : s->n_threads;
+    // SmolVLM (and most LLaVA-style GGUF VLMs) use "<image>" as the media marker.
+    params.media_marker = "<image>";
+
+    s->mm = mtmd_init_from_file(path, s->model, params);
+    env->ReleaseStringUTFChars(jMmproj, path);
+    if (!s->mm) {
+        LOGE("failed to init mtmd/mmproj");
+        jni_throw(env, "failed to load mmproj vision model");
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+// Image -> text generation: the prompt text must contain the <image> marker where the
+// image tokens are inserted. Uses the mtmd helper to process text + image chunks, then the
+// standard sampling loop.
+extern "C" JNIEXPORT void JNICALL
+Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
+        JNIEnv* env, jobject,
+        jlong handle, jstring jPrompt, jbyteArray jImage,
+        jfloat temperature, jint topK, jfloat topP, jfloat minP,
+        jint maxTokens, jfloat repeatPenalty, jint seed,
+        jobject callback) {
+
+    LlamaSession* s = lookup_session(handle);
+    if (!s || !s->model || !s->ctx || !s->mm) {
+        jni_throw(env, "vision model not loaded");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s->session_mutex);
+    s->stop = false;
+
+    const llama_vocab* vocab = llama_model_get_vocab(s->model);
+    if (!vocab) return;
+
+    const char* prompt = env->GetStringUTFChars(jPrompt, nullptr);
+    std::string text(prompt ? prompt : "");
+    env->ReleaseStringUTFChars(jPrompt, prompt);
+
+    jsize imgLen = env->GetArrayLength(jImage);
+    jbyte* imgBuf = env->GetByteArrayElements(jImage, nullptr);
+
+    // Stateless: start from position 0.
+    llama_memory_seq_rm(llama_get_memory(s->ctx), -1, -1, -1);
+
+    mtmd_input_text inp;
+    inp.text = text.c_str();
+    inp.text_len = (int32_t) text.size();
+    inp.add_special = true;
+    inp.parse_special = true;
+
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    mtmd_helper_bitmap_wrapper bw =
+        mtmd_helper_bitmap_init_from_buf(s->mm, (const unsigned char*) imgBuf, (size_t) imgLen, false);
+    env->ReleaseByteArrayElements(jImage, imgBuf, JNI_ABORT);
+
+    if (bw.bitmap == nullptr) {
+        jni_throw(env, "failed to decode image");
+        return;
+    }
+
+    const mtmd_bitmap* bitmaps[1] = { bw.bitmap };
+    if (mtmd_tokenize(s->mm, chunks.ptr.get(), &inp, bitmaps, 1) != 0) {
+        mtmd_bitmap_free(bw.bitmap);
+        jni_throw(env, "vision prompt tokenization failed");
+        return;
+    }
+
+    llama_pos n_past = 0;
+    if (mtmd_helper_eval_chunks(s->mm, s->ctx, chunks.ptr.get(), 0, 0, s->n_batch, true, &n_past) != 0) {
+        mtmd_bitmap_free(bw.bitmap);
+        jni_throw(env, "vision prompt decoding failed");
+        return;
+    }
+    mtmd_bitmap_free(bw.bitmap);
+
+    // --- sampler chain (same as text generation) ---
+    llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
+    sparams.no_perf = true;
+    llama_sampler* smpl = llama_sampler_chain_init(sparams);
+    if (temperature > 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
+    } else {
+        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    }
+    if (topK > 0) llama_sampler_chain_add(smpl, llama_sampler_init_top_k(topK));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(topP, 1));
+    if (minP > 0.0f) llama_sampler_chain_add(smpl, llama_sampler_init_min_p(minP, 1));
+    if (repeatPenalty > 1.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+                llama_vocab_n_tokens(vocab), 64, repeatPenalty, 0.0f, 0.0f));
+    }
+    uint32_t rng_seed = seed >= 0 ? (uint32_t) seed : (uint32_t) time(nullptr);
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(rng_seed));
+
+    jclass cbClass = env->GetObjectClass(callback);
+    jmethodID onToken = env->GetMethodID(cbClass, "onToken", "(Ljava/lang/String;)V");
+
+    char piece[128];
+    llama_token next[1] = {0};
+    for (int i = 0; i < maxTokens && !s->stop; i++) {
+        llama_token id = llama_sampler_sample(smpl, s->ctx, -1);
+        llama_sampler_accept(smpl, id);
+        if (llama_vocab_is_eog(vocab, id)) break;
+
+        int32_t np = llama_token_to_piece(vocab, id, piece, (int32_t) sizeof(piece), 0, false);
+        if (np > 0) {
+            jstring jPiece = to_jstring(env, piece, (size_t) np);
+            env->CallVoidMethod(callback, onToken, jPiece);
+            env->DeleteLocalRef(jPiece);
+        }
+
+        next[0] = id;
+        llama_batch batch = llama_batch_get_one(next, 1);
+        if (llama_decode(s->ctx, batch) != 0) {
+            LOGE("decode failed at step %d", i);
+            break;
+        }
+    }
+    llama_sampler_free(smpl);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeStop(JNIEnv*, jobject, jlong handle) {
     LlamaSession* s = lookup_session(handle);
@@ -350,6 +554,7 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeUnload(JNIEnv*, jobject, jlong handle) {
     LlamaSession* s = remove_session(handle);
     if (!s) return;
+    if (s->mm) mtmd_free(s->mm);
     if (s->ctx) llama_free(s->ctx);
     if (s->model) llama_model_free(s->model);
     delete s;

@@ -5,19 +5,22 @@ import com.sgaikar1.edgedroid.common.LogProvider
 /**
  * Device-level configuration handed to a [RuntimePlugin] at creation time. The SDK exposes
  * coarse "threading" and "memory" intent; runtimes translate it to their native params.
+ * [extras] carries runtime-specific knobs (e.g. `executionProvider`, `optLevel`) that the
+ * generic fields don't cover — each runtime reads the keys it understands.
  */
 data class RuntimeConfig(
     val threading: ThreadingConfig = ThreadingConfig(),
     val memory: MemoryConfig = MemoryConfig(),
     val log: LogProvider = LogProvider.NO_OP,
+    val extras: Map<String, Any> = emptyMap(),
 )
 
 data class ThreadingConfig(
-    val threads: Int = deviceThreadCount(4),
+    val threads: Int = deviceThreadCount(8),
     val batchThreads: Int = deviceThreadCount(8),
 ) {
     class Builder {
-        private var threadsValue: Int = deviceThreadCount(4)
+        private var threadsValue: Int = deviceThreadCount(8)
         private var batchThreadsValue: Int = deviceThreadCount(8)
         fun threads(value: Int): Builder = apply { threadsValue = value }
         fun batchThreads(value: Int): Builder = apply { batchThreadsValue = value }

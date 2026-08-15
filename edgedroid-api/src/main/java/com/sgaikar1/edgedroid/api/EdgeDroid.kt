@@ -12,6 +12,7 @@ import com.sgaikar1.edgedroid.core.MemoryConfig
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelDownloadState
 import com.sgaikar1.edgedroid.core.ModelProvider
+import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimePlugin
 import com.sgaikar1.edgedroid.core.ThreadingConfig
@@ -26,6 +27,7 @@ import com.sgaikar1.edgedroid.api.internal.SdkEngine
 import com.sgaikar1.edgedroid.core.Capability
 import com.sgaikar1.edgedroid.core.CompatibilityChecker
 import com.sgaikar1.edgedroid.core.CompatibilityReport
+import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -35,16 +37,24 @@ import java.io.File
  * The single entry point an Android developer sees. It owns everything except inference:
  * downloads, storage, runtime selection, sessions, streaming, threading.
  */
-class LlmSdk private constructor(
+class EdgeDroid private constructor(
     private val engine: SdkEngine,
     private val provider: ModelProvider,
     private val registry: RuntimeRegistry,
     private val compatibilityChecker: CompatibilityChecker,
     private val log: LogProvider,
+    private val deviceCapabilities: DeviceCapabilities,
 ) {
 
     /** Observable engine lifecycle state (Idle → Loading → Ready → Generating …). */
     val state: StateFlow<LlmEngineState> = engine.state
+
+    /**
+     * Hardware snapshot of the device this SDK was built on. Apps use it to pre-filter
+     * downloadable models and to pick sane defaults before a download.
+     */
+    val capabilities: DeviceCapabilities
+        get() = deviceCapabilities
 
     /** Model acquisition / management surface. */
     val models: ModelFacade = ModelFacade()
@@ -71,27 +81,42 @@ class LlmSdk private constructor(
 
     /**
      * Stream a completion as a cold [Flow] of [Token]. The SDK handles session history,
-     * prompt rendering, runtime selection and threading.
+     * prompt rendering, runtime selection and threading. [images] are forwarded to vision-capable
+     * runtimes; text-only runtimes ignore them.
      */
-    fun stream(prompt: String, options: GenerationOptions = GenerationOptions.DEFAULT): Flow<Token> =
-        engine.stream(prompt, options)
+    fun stream(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
+        options: GenerationOptions = GenerationOptions.DEFAULT,
+    ): Flow<Token> = engine.stream(prompt, images, options)
 
     /**
      * Convenience streaming with a callback. Suspend until generation finishes.
      */
     suspend fun stream(
         prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
         options: GenerationOptions = GenerationOptions.DEFAULT,
         onToken: (Token) -> Unit,
     ) {
-        engine.stream(prompt, options).collect(onToken)
+        engine.stream(prompt, images, options).collect(onToken)
     }
 
     /**
      * Non-streaming completion returning the full text.
      */
-    suspend fun generate(prompt: String, options: GenerationOptions = GenerationOptions.DEFAULT): String =
-        engine.generate(prompt, options)
+    suspend fun generate(
+        prompt: String,
+        images: List<PromptProcessor.PromptAttachment> = emptyList(),
+        options: GenerationOptions = GenerationOptions.DEFAULT,
+    ): String = engine.generate(prompt, images, options)
+
+    /**
+     * Embedding vector for [text] using the loaded model. Requires the selected runtime to
+     * support [Capability.EMBEDDINGS] (e.g. the ONNX runtime with an embedding model); other
+     * runtimes throw [UnsupportedOperationException].
+     */
+    suspend fun embeddings(text: String): FloatArray = engine.embeddings(text)
 
     /**
      * Interrupt an in-flight generation.
@@ -161,6 +186,7 @@ class LlmSdk private constructor(
         private val memory = MemoryConfig.Builder()
         private var logProvider: LogProvider = LogProvider.NO_OP
         private val plugins = mutableListOf<RuntimePlugin>()
+        private val extras = mutableMapOf<String, Any>()
 
         fun runtime(spec: RuntimeSpec): Builder = apply { this.runtimeSpec = spec }
         fun model(model: Model): Builder = apply { this.model = model }
@@ -170,10 +196,20 @@ class LlmSdk private constructor(
             apply { threading.apply(block) }
         fun memory(block: MemoryConfig.Builder.() -> Unit): Builder =
             apply { memory.apply(block) }
+
+        /** Add or override a runtime-specific configuration knob (e.g. `executionProvider`). */
+        fun extra(key: String, value: Any): Builder = apply { extras[key] = value }
+
+        /** Replace the whole set of runtime-specific configuration knobs. */
+        fun extras(map: Map<String, Any>): Builder = apply {
+            extras.clear()
+            extras.putAll(map)
+        }
+
         fun logging(provider: LogProvider): Builder = apply { this.logProvider = provider }
         fun registerRuntime(plugin: RuntimePlugin): Builder = apply { plugins.add(plugin) }
 
-        fun build(): LlmSdk {
+        fun build(): EdgeDroid {
             val log = logProvider
             val spec = runtimeSpec
             val paths = StoragePaths(appContext)
@@ -194,17 +230,24 @@ class LlmSdk private constructor(
             )
 
             // Fail fast before touching the network if the download cannot possibly succeed.
-            val downloader = DownloadManager(storage, downloadConfig.build(), log) { model ->
-                checker.check(model).errors.firstOrNull()?.let {
-                    ModelDownloadState.Failed(kind = it.code, message = it.message)
-                }
-            }
+            val downloader = DownloadManager(
+                storage = storage,
+                config = downloadConfig.build(),
+                log = log,
+                preflight = { model ->
+                    checker.check(model).errors.firstOrNull()?.let {
+                        ModelDownloadState.Failed(kind = it.code, message = it.message)
+                    }
+                },
+                context = appContext,
+            )
 
             val provider = InternalModelProvider(storage, downloader, log)
             val runtimeConfig = RuntimeConfig(
                 threading = threading.build(),
                 memory = memoryConfig,
                 log = log,
+                extras = extras,
             )
 
             lateinit var engine: SdkEngine
@@ -228,11 +271,18 @@ class LlmSdk private constructor(
             )
 
             log.log(LogProvider.Level.INFO, "EdgeDroid", "EdgeDroid SDK built")
-            return LlmSdk(engine, provider, registry, checker, log)
+            return EdgeDroid(engine, provider, registry, checker, log, deviceCapabilities)
         }
     }
 
     companion object {
         val DEFAULT_OPTIONS: GenerationOptions = GenerationOptions.DEFAULT
+
+        /**
+         * Read this device's hardware capabilities without building a full SDK. Lets an app
+         * pick device-appropriate defaults (threads, context, GPU policy) up front.
+         */
+        fun deviceCapabilities(context: Context): DeviceCapabilities =
+            AndroidDeviceCapabilities(context).get()
     }
 }

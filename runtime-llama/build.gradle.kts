@@ -6,6 +6,13 @@ plugins {
     alias(libs.plugins.maven.publish)
 }
 
+// Host toolchain for the ggml-vulkan shader build. Defaults to Homebrew on Apple Silicon;
+// override with EDGEDROID_VULKAN_PREFIX (or -PEDGEDROID_VULKAN_PREFIX=...) on other hosts.
+val vulkanPrefix: String =
+    (project.findProperty("EDGEDROID_VULKAN_PREFIX") as? String)
+        ?: System.getenv("EDGEDROID_VULKAN_PREFIX")
+        ?: "/opt/homebrew"
+
 android {
     namespace = "com.sgaikar1.edgedroid.runtime.llama"
     compileSdk = 35
@@ -22,7 +29,7 @@ android {
                 cppFlags += listOf(
                     "-std=c++17", "-fexceptions", "-frtti",
                     // Vulkan C++ bindings for the ggml-vulkan backend (host brew install).
-                    "-I/opt/homebrew/include",
+                    "-I$vulkanPrefix/include",
                 )
                 arguments += listOf(
                     "-DGGML_NATIVE=OFF",
@@ -37,11 +44,13 @@ android {
                     "-DLLAMA_BUILD_SERVER=OFF",
                     "-DLLAMA_BUILD_TESTS=OFF",
                     "-DLLAMA_BUILD_TOOLS=OFF",
+                    "-DLLAMA_BUILD_COMMON=ON",
+                    "-DLLAMA_BUILD_MTMD=ON",
                     "-DLLAMA_CURL=OFF",
-                    // Homebrew host tools for the Vulkan shader build (Apple Silicon).
-                    "-DCMAKE_PREFIX_PATH=/opt/homebrew",
-                    "-DVulkan_GLSLC_EXECUTABLE=/opt/homebrew/bin/glslc",
-                    "-DSPIRV-Headers_DIR=/opt/homebrew/share/cmake/SPIRV-Headers",
+                    // Host tools for the Vulkan shader build (Homebrew default on Apple Silicon).
+                    "-DCMAKE_PREFIX_PATH=$vulkanPrefix",
+                    "-DVulkan_GLSLC_EXECUTABLE=$vulkanPrefix/bin/glslc",
+                    "-DSPIRV-Headers_DIR=$vulkanPrefix/share/cmake/SPIRV-Headers",
                 )
             }
         }
