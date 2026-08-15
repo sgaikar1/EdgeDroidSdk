@@ -283,13 +283,17 @@ if a driver fails.
 ## 🔧 Building from source
 
 llama.cpp is a git submodule pinned at `b10285` under `runtime-llama/src/main/cpp/llama.cpp`.
-Native prerequisites (macOS):
+Native prerequisites (macOS / Apple Silicon):
 
 ```sh
 brew install shaderc spirv-headers vulkan-headers ninja
 git submodule update --init --recursive
 ./gradlew :sample-app:assembleDebug
 ```
+
+The ggml-vulkan shader build expects the Vulkan host toolchain at `/opt/homebrew`
+(Homebrew on Apple Silicon). On other hosts, point it at your toolchain prefix with
+`-PEDGEDROID_VULKAN_PREFIX=/your/prefix` or the `EDGEDROID_VULKAN_PREFIX` env var.
 
 Publishing a release (maintainers):
 
@@ -327,3 +331,6 @@ and the "add a runtime" walkthrough. Please read the [Code of Conduct](CODE_OF_C
 ## ⚖️ License
 
 [MIT](LICENSE) © 2026 Santosh Gaikar. The bundled llama.cpp is also MIT-licensed.
+
+Third-party artifacts redistributed in this repo (e.g. the bundled ONNX tokenizer from
+Xenova/all-MiniLM-L6-v2) are credited in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
