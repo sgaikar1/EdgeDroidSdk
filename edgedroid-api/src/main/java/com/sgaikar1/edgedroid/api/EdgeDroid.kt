@@ -27,6 +27,7 @@ import com.sgaikar1.edgedroid.api.internal.SdkEngine
 import com.sgaikar1.edgedroid.core.Capability
 import com.sgaikar1.edgedroid.core.CompatibilityChecker
 import com.sgaikar1.edgedroid.core.CompatibilityReport
+import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
@@ -42,10 +43,18 @@ class EdgeDroid private constructor(
     private val registry: RuntimeRegistry,
     private val compatibilityChecker: CompatibilityChecker,
     private val log: LogProvider,
+    private val deviceCapabilities: DeviceCapabilities,
 ) {
 
     /** Observable engine lifecycle state (Idle → Loading → Ready → Generating …). */
     val state: StateFlow<LlmEngineState> = engine.state
+
+    /**
+     * Hardware snapshot of the device this SDK was built on. Apps use it to pre-filter
+     * downloadable models and to pick sane defaults before a download.
+     */
+    val capabilities: DeviceCapabilities
+        get() = deviceCapabilities
 
     /** Model acquisition / management surface. */
     val models: ModelFacade = ModelFacade()
@@ -262,11 +271,18 @@ class EdgeDroid private constructor(
             )
 
             log.log(LogProvider.Level.INFO, "EdgeDroid", "EdgeDroid SDK built")
-            return EdgeDroid(engine, provider, registry, checker, log)
+            return EdgeDroid(engine, provider, registry, checker, log, deviceCapabilities)
         }
     }
 
     companion object {
         val DEFAULT_OPTIONS: GenerationOptions = GenerationOptions.DEFAULT
+
+        /**
+         * Read this device's hardware capabilities without building a full SDK. Lets an app
+         * pick device-appropriate defaults (threads, context, GPU policy) up front.
+         */
+        fun deviceCapabilities(context: Context): DeviceCapabilities =
+            AndroidDeviceCapabilities(context).get()
     }
 }

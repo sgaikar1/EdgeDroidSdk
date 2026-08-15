@@ -35,6 +35,10 @@ Your Android App
   background (progress notification + pause/resume + sha256 verification)
 - **Private/gated models** — auth headers for Hugging Face gated repos, Git LFS, corporate storage
 - **Compatibility check** — "can this device run this model?" before you download 500 MB
+- **Device capabilities** — read RAM / storage / CPU cores / Vulkan / ABI from the SDK, and
+  pre-filter the HF browser to models that actually fit this device
+- **Device-aware defaults** — threads, context size and GPU policy derived from the hardware,
+  with a one-tap "reset to device defaults" in the sample
 - **Capability system** — streaming, vision, embeddings, tool-calling, JSON, grammar
 - **Sample app** with a **Hugging Face model browser**, runtime picker, and chat UI
 
@@ -52,9 +56,9 @@ dependencyResolutionManagement {
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("io.github.sgaikar1:edgedroid-api:0.8.0")
-    implementation("io.github.sgaikar1:runtime-llama:0.8.0")   // llama.cpp
-    // or implementation("io.github.sgaikar1:runtime-onnx:0.8.0") // ONNX Runtime
+    implementation("io.github.sgaikar1:edgedroid-api:0.9.0")
+    implementation("io.github.sgaikar1:runtime-llama:0.9.0")   // llama.cpp
+    // or implementation("io.github.sgaikar1:runtime-onnx:0.9.0") // ONNX Runtime
 }
 ```
 
@@ -215,6 +219,26 @@ else report.errors.forEach { showError(it.message) }
 | Runtime ABI missing from the device | ⚠️ warn |
 | CPU core count | ℹ️ info |
 
+## 📱 Device capabilities & device-aware defaults
+
+Read the hardware the SDK was built on, and pre-filter downloads before committing to a big
+file:
+
+```kotlin
+val caps: DeviceCapabilities = EdgeDroid.deviceCapabilities(context) // or sdk.capabilities
+
+if (modelSize + 256MB > caps.freeStorageBytes) { /* won't fit — don't download */ }
+```
+
+`DeviceCapabilities` carries `supportedAbis`, `totalRamBytes`, `availableRamBytes`,
+`freeStorageBytes`, `cpuCores` and `vulkanSupported`. The sample app uses it to:
+
+- default the HF browser's size cap to what the device can actually hold,
+- badge each model as **fits / large-for-RAM / blocked** (storage, runtime, ABI), hiding
+  unsupported ones behind a "Show all" toggle,
+- derive sane default settings (`threads = min(cores, 8)`, context size from RAM, GPU = AUTO
+  when Vulkan is present else CPU) and offer a one-tap reset.
+
 ## 🧩 Runtimes
 
 | Runtime | Formats | Capabilities | Notes |
@@ -247,7 +271,10 @@ if a driver fails.
 `sample-app/` is a Jetpack Compose demo that shows everything:
 
 - **Runtime + model picker** (Settings screen) — llama.cpp / ONNX, with a **Hugging Face
-  model browser** to search and download any GGUF/ONNX model
+  model browser** that filters to device-supported GGUF/ONNX models (size cap auto-set from
+  free storage, fit badges, "Show all" toggle)
+- **Device-aware defaults** — Settings shows a device summary, "Recommended: …" hints next to
+  threads/context/GPU, and a **Reset to device defaults** button
 - **Chat** with live token streaming, a **Reasoning** area for thinking models, and a
   **Thinking…** indicator
 - **Image attach** for vision models, **Embeddings** for ONNX, **Download / Load / Unload**,
@@ -268,7 +295,7 @@ Publishing a release (maintainers):
 
 ```sh
 ./gradlew publishAllPublicationsToMavenCentralRepository   # needs signing key + portal token
-git tag v0.8.0 && git push origin main --tags
+git tag v0.9.0 && git push origin main --tags
 ```
 
 ## 🗺️ Future scope & where you can help

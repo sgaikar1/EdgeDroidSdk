@@ -3,6 +3,7 @@ package com.sgaikar1.edgedroid.sample
 import android.content.Context
 import com.sgaikar1.edgedroid.api.EdgeDroid
 import com.sgaikar1.edgedroid.common.ModelFormat
+import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 import com.sgaikar1.edgedroid.core.LlmEngineState
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,9 @@ class SampleStore(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("edgedroid_sample", Context.MODE_PRIVATE)
+
+    /** Hardware snapshot used to pre-filter models and pick device-aware defaults. */
+    val capabilities: DeviceCapabilities = EdgeDroid.deviceCapabilities(appContext)
 
     private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<SampleConfig> = _config.asStateFlow()
@@ -76,6 +80,14 @@ class SampleStore(private val context: Context) {
             .toSet()
     }
 
+    /** Delete a downloaded model's files (and any mmproj/tokenizer sidecar) from disk. */
+    suspend fun deleteModel(id: String) {
+        withContext(Dispatchers.Default) {
+            runCatching { sdk.models.delete(id) }
+            refreshDownloaded()
+        }
+    }
+
     private fun subscribeState() {
         stateJob?.cancel()
         stateJob = scope.launch { sdk.state.collect { _sdkState.value = it } }
@@ -84,7 +96,8 @@ class SampleStore(private val context: Context) {
     // ---- persistence (org.json) ----
 
     private fun loadConfig(): SampleConfig {
-        val raw = prefs.getString(KEY_CONFIG, null) ?: return SampleConfig()
+        val raw = prefs.getString(KEY_CONFIG, null)
+            ?: return SampleConfig.recommended(capabilities)
         return runCatching {
             val o = JSONObject(raw)
             val custom = o.optJSONObject("customModel")?.let {
@@ -115,7 +128,7 @@ class SampleStore(private val context: Context) {
                 topK = o.optInt("topK", 40),
                 systemPrompt = o.optString("systemPrompt", ""),
             )
-        }.getOrNull() ?: SampleConfig()
+        }.getOrNull() ?: SampleConfig.recommended(capabilities)
     }
 
     private fun saveConfig(c: SampleConfig) {

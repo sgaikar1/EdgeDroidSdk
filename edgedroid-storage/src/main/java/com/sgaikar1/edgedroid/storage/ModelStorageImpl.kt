@@ -66,7 +66,12 @@ class ModelStorageImpl(
     override fun delete(model: Model): Boolean {
         val entry = entryFor(model.id)
         if (entry != null) {
-            File(entry.metadata["localPath"] ?: "").delete()
+            // Remove every file this model owns (model, mmproj, tokenizer, cached assets) —
+            // all metadata values are stored as absolute paths.
+            entry.metadata.values
+                .filterIsInstance<String>()
+                .filter { it.startsWith("/") }
+                .forEach { File(it).delete() }
         }
         val updated = readEntries().filterNot { it.id == model.id }
         writeEntries(updated)

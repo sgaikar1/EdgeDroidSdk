@@ -170,6 +170,8 @@ class DownloadManager(
 
             val partFile = File(storage.downloadsDir, "${model.id}.part")
             val finalFile = storage.modelPath(model)
+            partFile.parentFile?.mkdirs()
+            finalFile.parentFile?.mkdirs()
             var retries = config.maxRetries
 
             try {

@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 import kotlinx.coroutines.launch
 
@@ -62,9 +63,17 @@ class SettingsActivity : ComponentActivity() {
 @Composable
 fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     val config by store.config.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf(config) }
     LaunchedEffect(config) { draft = config }
+    val caps = store.capabilities
+    val recommended = remember(caps) { SampleConfig.recommended(caps) }
+    val downloadedIds by store.downloadedIds.collectAsStateWithLifecycle()
+    val downloadedModels = remember(downloadedIds) {
+        store.sdk.models.available().filter { it.id in downloadedIds }
+    }
+    val fitPresets = remember(caps) { SampleModels.forRuntime(draft.runtime).filter { it.fitsDevice(caps) } }
 
     val hfLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -83,6 +92,11 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("SDK Settings", style = MaterialTheme.typography.titleLarge)
         Text("Runtime: ${draft.runtime} · Model: ${draft.model.label}", style = MaterialTheme.typography.bodySmall)
+        Text(
+            deviceSummaryLine(caps),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
 
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
@@ -100,12 +114,20 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                 DropdownBox(
                     label = "Model",
                     selected = draft.model.label,
-                    options = SampleModels.forRuntime(draft.runtime).map { it.label },
+                    options = fitPresets.map { it.label },
                     modifier = Modifier.weight(1.2f),
                 ) { label ->
-                    val model = SampleModels.forRuntime(draft.runtime).first { it.label == label }
+                    val model = fitPresets.first { it.label == label }
                     draft = draft.copy(modelId = model.id, customModel = null)
                 }
+            }
+
+            if (!draft.model.fitsDevice(caps)) {
+                Text(
+                    "This model needs more free storage than the device has — download will fail.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
 
             Button(
@@ -120,12 +142,37 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                 Text("Browse HuggingFace models…")
             }
 
+            if (downloadedModels.isNotEmpty()) {
+                Text("Downloaded models", style = MaterialTheme.typography.labelLarge)
+                downloadedModels.forEach { model ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(model.id, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "${if (model.format.isOnnx) "ONNX" else "GGUF"} · " +
+                                    model.localPath?.let { formatBytes(java.io.File(it).length()) } ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        TextButton(onClick = { scope.launch { store.deleteModel(model.id) } }) {
+                            Text("Delete")
+                        }
+                    }
+                }
+            }
+
             SliderRow("Threads", draft.threads.toFloat(), 1f..8f, 7) { draft = draft.copy(threads = it.toInt()) }
+            RecommendedHint("Recommended: ${recommended.threads}")
 
             if (draft.runtime == SampleRuntime.LLAMA) {
                 SliderRow("Context size", draft.contextSize.toFloat(), 512f..4096f, 7) {
                     draft = draft.copy(contextSize = it.toInt())
                 }
+                RecommendedHint("Recommended: ${recommended.contextSize}")
                 DropdownBox(
                     label = "GPU",
                     selected = when (draft.gpu) {
@@ -145,6 +192,12 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                         },
                     )
                 }
+                RecommendedHint("Recommended: ${
+                    when (recommended.gpu) {
+                        is GpuConfig.Cpu -> "CPU"
+                        else -> "AUTO"
+                    }
+                }")
             } else {
                 DropdownBox(
                     label = "Execution provider",
@@ -153,6 +206,15 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                 ) { choice ->
                     draft = draft.copy(executionProvider = if (choice == "CPU") null else choice)
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { draft = recommended },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Reset to device defaults")
                 }
             }
 
@@ -189,4 +251,17 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
             Text("Apply")
         }
     }
+}
+
+@Composable
+private fun RecommendedHint(text: String) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+}
+
+private fun deviceSummaryLine(caps: DeviceCapabilities): String = buildString {
+    append("Device: ")
+    if (caps.cpuCores > 0) append("${caps.cpuCores} cores · ")
+    if (caps.totalRamBytes > 0) append(formatBytes(caps.totalRamBytes) + " RAM · ")
+    if (caps.freeStorageBytes > 0) append(formatBytes(caps.freeStorageBytes) + " free · ")
+    append(if (caps.vulkanSupported) "Vulkan ✓" else "CPU only")
 }

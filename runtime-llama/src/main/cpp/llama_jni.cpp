@@ -78,6 +78,57 @@ static void jni_throw(JNIEnv* env, const char* message) {
     env->ThrowNew(ex, message);
 }
 
+// Lenient UTF-8 -> UTF-16 conversion for JNI. Byte-fallback tokenizers (e.g. Qwen3, GPT-2
+// style) can split one multi-byte character across two tokens, so a single piece may hold a
+// truncated/invalid UTF-8 sequence. NewStringUTF would abort on that; NewString() does not
+// validate, and malformed bytes are replaced with U+FFFD so streaming never crashes.
+static jstring to_jstring(JNIEnv* env, const char* data, size_t len) {
+    std::vector<jchar> out;
+    out.reserve(len);
+    size_t i = 0;
+    while (i < len) {
+        const unsigned char c = (unsigned char) data[i];
+        uint32_t cp = 0;
+        int extra = 0;
+        if (c < 0x80) {
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0) {
+            cp = c & 0x1F; extra = 1;
+        } else if ((c & 0xF0) == 0xE0) {
+            cp = c & 0x0F; extra = 2;
+        } else if ((c & 0xF8) == 0xF0) {
+            cp = c & 0x07; extra = 3;
+        } else {
+            out.push_back(0xFFFD);
+            i++;
+            continue;
+        }
+        bool valid = i + extra < len;
+        for (int k = 1; valid && k <= extra; ++k) {
+            const unsigned char cc = (unsigned char) data[i + k];
+            if ((cc & 0xC0) != 0x80) {
+                valid = false;
+            } else {
+                cp = (cp << 6) | (cc & 0x3F);
+            }
+        }
+        if (!valid) {
+            out.push_back(0xFFFD);
+            i++;
+            continue;
+        }
+        i += extra + 1;
+        if (cp >= 0x10000 && cp <= 0x10FFFF) {
+            cp -= 0x10000;
+            out.push_back((jchar)(0xD800 | (cp >> 10)));
+            out.push_back((jchar)(0xDC00 | (cp & 0x3FF)));
+        } else {
+            out.push_back((jchar) cp);
+        }
+    }
+    return env->NewString(out.data(), (jsize) out.size());
+}
+
 // Decodes tokens into the KV cache at explicit positions [base, base+n). Positions are
 // explicit so the prefix (0..P-1) can be cached and reused; the body starts at P. Only the
 // final prompt token requests logits (needed to sample the first generated token).
@@ -157,10 +208,16 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
     cparams.n_threads = nThreads;
     cparams.n_threads_batch = nThreadsBatch;
 
+    g_last_error.clear();
     llama_context* ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
+        std::string message = "failed to create context";
+        if (!g_last_error.empty()) {
+            message += ": " + g_last_error;
+        }
         llama_model_free(model);
-        jni_throw(env, "failed to create context");
+        LOGE("%s", message.c_str());
+        jni_throw(env, message.c_str());
         return 0L;
     }
 
@@ -329,8 +386,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
 
         int32_t np = llama_token_to_piece(vocab, id, piece, (int32_t) sizeof(piece), 0, false);
         if (np > 0) {
-            std::string piece_str(piece, (size_t) np);
-            jstring jPiece = env->NewStringUTF(piece_str.c_str());
+            jstring jPiece = to_jstring(env, piece, (size_t) np);
             env->CallVoidMethod(callback, onToken, jPiece);
             env->DeleteLocalRef(jPiece);
         }
@@ -473,8 +529,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
 
         int32_t np = llama_token_to_piece(vocab, id, piece, (int32_t) sizeof(piece), 0, false);
         if (np > 0) {
-            std::string piece_str(piece, (size_t) np);
-            jstring jPiece = env->NewStringUTF(piece_str.c_str());
+            jstring jPiece = to_jstring(env, piece, (size_t) np);
             env->CallVoidMethod(callback, onToken, jPiece);
             env->DeleteLocalRef(jPiece);
         }

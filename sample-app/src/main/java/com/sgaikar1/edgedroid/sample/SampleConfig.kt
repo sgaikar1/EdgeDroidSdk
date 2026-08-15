@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.sample
 
 import com.sgaikar1.edgedroid.common.ModelFormat
+import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 
 enum class SampleRuntime { LLAMA, ONNX }
@@ -17,7 +18,17 @@ data class SampleModel(
     val embeddingCapable: Boolean,
     val visionCapable: Boolean = false,
     val mmprojUrl: String? = null,
-)
+) {
+    /**
+     * True if this model can realistically run on [caps]: the model file (plus download
+     * headroom) fits the free storage, and a runtime for its format is registered.
+     */
+    fun fitsDevice(caps: DeviceCapabilities): Boolean {
+        if (caps.freeStorageBytes <= 0L) return true
+        val size = sizeBytes ?: return true
+        return size + SampleConfig.STORAGE_HEADROOM_BYTES <= caps.freeStorageBytes
+    }
+}
 
 object SampleModels {
     val ALL: List<SampleModel> = listOf(
@@ -80,7 +91,7 @@ data class SampleConfig(
     val runtime: SampleRuntime = SampleRuntime.LLAMA,
     val modelId: String = "smollm2-135m-instruct",
     val customModel: HfModelSelection? = null,
-    val threads: Int = 4,
+    val threads: Int = 8,
     val contextSize: Int = 2048,
     val gpu: GpuConfig = GpuConfig.Auto,
     val executionProvider: String? = "NNAPI",
@@ -99,5 +110,31 @@ data class SampleConfig(
         if (runtime == this.runtime) return this
         val first = SampleModels.forRuntime(runtime).first()
         return copy(runtime = runtime, modelId = first.id, customModel = null)
+    }
+
+    companion object {
+        /** Extra free storage kept free beyond the model file (mirrors the SDK checker). */
+        const val STORAGE_HEADROOM_BYTES = 256L * 1024 * 1024
+
+        /**
+         * Device-aware defaults. Called on first launch (no persisted config) and by the
+         * "Reset to device defaults" button; every value remains user-tweakable afterwards.
+         */
+        fun recommended(caps: DeviceCapabilities): SampleConfig {
+            val threads = caps.cpuCores.coerceIn(2, 8)
+            val contextSize = when {
+                caps.totalRamBytes >= 8L * 1024 * 1024 * 1024 -> 4096
+                caps.totalRamBytes >= 4L * 1024 * 1024 * 1024 -> 2048
+                else -> 1024
+            }
+            val gpu = if (caps.vulkanSupported) GpuConfig.Auto else GpuConfig.Cpu
+            val firstModel = SampleModels.forRuntime(SampleRuntime.LLAMA).first()
+            return SampleConfig(
+                threads = threads,
+                contextSize = contextSize,
+                gpu = gpu,
+                modelId = firstModel.id,
+            )
+        }
     }
 }

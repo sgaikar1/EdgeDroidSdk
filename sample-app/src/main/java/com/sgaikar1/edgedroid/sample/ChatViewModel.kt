@@ -209,6 +209,11 @@ class ChatViewModel(
         viewModelScope.launch {
             _downloadProgress.value = 0f
             _downloadError.value = null
+            val report = runCatching { sdk.models.checkCompatibility() }.getOrNull()
+            if (report != null && !report.isDownloadable) {
+                _downloadError.value = report.errors.joinToString(" ") { it.message }
+                return@launch
+            }
             sdk.models.download().collect { state ->
                 when (state) {
                     is ModelDownloadState.Downloading -> _downloadProgress.value = state.progress

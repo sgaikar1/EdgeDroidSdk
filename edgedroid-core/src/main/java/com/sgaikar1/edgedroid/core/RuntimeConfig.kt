@@ -16,11 +16,11 @@ data class RuntimeConfig(
 )
 
 data class ThreadingConfig(
-    val threads: Int = deviceThreadCount(4),
+    val threads: Int = deviceThreadCount(8),
     val batchThreads: Int = deviceThreadCount(8),
 ) {
     class Builder {
-        private var threadsValue: Int = deviceThreadCount(4)
+        private var threadsValue: Int = deviceThreadCount(8)
         private var batchThreadsValue: Int = deviceThreadCount(8)
         fun threads(value: Int): Builder = apply { threadsValue = value }
         fun batchThreads(value: Int): Builder = apply { batchThreadsValue = value }
