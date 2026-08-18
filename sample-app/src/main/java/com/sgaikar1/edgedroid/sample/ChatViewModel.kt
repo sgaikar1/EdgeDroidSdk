@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TokenMetrics
 import com.sgaikar1.edgedroid.core.LlmEngineState
 import com.sgaikar1.edgedroid.core.ModelDownloadState
 import com.sgaikar1.edgedroid.core.PromptProcessor
@@ -41,6 +42,9 @@ class ChatViewModel(
 
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText: StateFlow<String?> = _streamingText.asStateFlow()
+
+    private val _streamingMetrics = MutableStateFlow<String?>(null)
+    val streamingMetrics: StateFlow<String?> = _streamingMetrics.asStateFlow()
 
     private val _reasoningText = MutableStateFlow<String?>(null)
     val reasoningText: StateFlow<String?> = _reasoningText.asStateFlow()
@@ -85,6 +89,7 @@ class ChatViewModel(
             }
             _messages.value = emptyList()
             _streamingText.value = null
+            _streamingMetrics.value = null
             _reasoningText.value = null
             _embeddingResult.value = null
             _compatibility.value = null
@@ -101,10 +106,12 @@ class ChatViewModel(
 
         _messages.update { it + ChatMessage("user", text) }
         _streamingText.value = ""
+        _streamingMetrics.value = null
         _reasoningText.value = null
         val raw = StringBuilder()
         val answer = StringBuilder()
         val reasoning = StringBuilder()
+        var lastMetrics: TokenMetrics? = null
 
         generationJob = viewModelScope.launch {
             val image = _attachedImage.value
@@ -134,6 +141,21 @@ class ChatViewModel(
                         answer.append(a)
                         _streamingText.value = a.ifEmpty { null }
                     }
+                    token.metrics?.let { m ->
+                        lastMetrics = m
+                        _streamingMetrics.value =
+                            "tok/s ${"%.1f".format(m.tokensPerSecond)}" +
+                                " · avg ${"%.1f".format(m.averageTokensPerSecond)}" +
+                                " · TTFT ${m.timeToFirstTokenMs} ms"
+                    }
+                }
+                // Final per-session aggregate from the runtime (llama.cpp llama_perf_*).
+                val s = sdk.stats()
+                val ttft = lastMetrics?.timeToFirstTokenMs
+                _streamingMetrics.value = buildString {
+                    append("${"%.1f".format(s.tokensPerSecond)} tok/s · ")
+                    append("${s.evalTokens} eval tok · ${s.totalMs} ms")
+                    if (ttft != null) append(" · TTFT $ttft ms")
                 }
                 _messages.update {
                     it + ChatMessage(
@@ -148,6 +170,7 @@ class ChatViewModel(
                 Log.e("EdgeDroid.Sample", "Generation failed", t)
             } finally {
                 _streamingText.value = null
+                _streamingMetrics.value = null
                 _reasoningText.value = null
                 clearImage()
             }
@@ -268,5 +291,6 @@ class ChatViewModel(
         _messages.value = emptyList()
         _reasoningText.value = null
         _streamingText.value = null
+        _streamingMetrics.value = null
     }
 }

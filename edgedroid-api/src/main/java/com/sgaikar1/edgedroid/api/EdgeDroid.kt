@@ -3,6 +3,7 @@ package com.sgaikar1.edgedroid.api
 import android.content.Context
 import com.sgaikar1.edgedroid.common.FailureKind
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.SdkResult
 import com.sgaikar1.edgedroid.common.Token
@@ -110,6 +111,14 @@ class EdgeDroid private constructor(
         images: List<PromptProcessor.PromptAttachment> = emptyList(),
         options: GenerationOptions = GenerationOptions.DEFAULT,
     ): String = engine.generate(prompt, images, options)
+
+    /**
+     * Aggregate generation statistics for the active runtime session — eval tokens, prompt/eval
+     * milliseconds and tok/s (see [Runtime.stats]). Zeroed until a model is loaded and the first
+     * [stream]/[generate] completes. Per-token rolling tok/s and TTFT are available directly on
+     * each streamed [Token.metrics].
+     */
+    fun stats(): GenerationStats = engine.stats()
 
     /**
      * Embedding vector for [text] using the loaded model. Requires the selected runtime to

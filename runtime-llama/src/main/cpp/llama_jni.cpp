@@ -154,6 +154,24 @@ static bool decode_tokens_at(LlamaSession* s, const std::vector<llama_token>& to
     return true;
 }
 
+// Captures llama.cpp context perf counters for this call. The context keeps cumulative
+// counters across calls, so we diff a before/after snapshot to report per-call numbers.
+// Out layout mirrors NativeLlama.kt: [t_p_eval_ms, t_eval_ms, n_p_eval, n_eval].
+static void perf_diff(const llama_perf_context_data& before,
+                      const llama_perf_context_data& after,
+                      double out[4]) {
+    out[0] = after.t_p_eval_ms - before.t_p_eval_ms;
+    out[1] = after.t_eval_ms - before.t_eval_ms;
+    out[2] = after.n_p_eval - before.n_p_eval;
+    out[3] = after.n_eval - before.n_eval;
+}
+
+static jdoubleArray perf_to_jdoublearray(JNIEnv* env, const double perf[4]) {
+    jdoubleArray result = env->NewDoubleArray(4);
+    if (result) env->SetDoubleArrayRegion(result, 0, 4, perf);
+    return result;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeInit(JNIEnv*, jobject) {
     llama_backend_init();
@@ -296,7 +314,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeSetPrefix(
     return JNI_TRUE;
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
         JNIEnv* env, jobject,
         jlong handle, jstring jBody,
@@ -307,13 +325,15 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     LlamaSession* s = lookup_session(handle);
     if (!s || !s->model || !s->ctx) {
         jni_throw(env, "model not loaded");
-        return;
+        return nullptr;
     }
     std::lock_guard<std::mutex> lock(s->session_mutex);
     s->stop = false;
 
     const llama_vocab* vocab = llama_model_get_vocab(s->model);
-    if (!vocab) return;
+    if (!vocab) return nullptr;
+
+    const llama_perf_context_data perf0 = llama_perf_context(s->ctx);
 
     // The prefix (system prompt) KV lives at positions [0, P). Trim everything >= P so a
     // shorter previous body doesn't leave stale KV behind, then decode the body at P.
@@ -335,21 +355,21 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     const int32_t room = (int32_t) llama_n_ctx(s->ctx) - maxTokens - 1;
     if (room <= 0) {
         jni_throw(env, "context window too small for the requested maxTokens");
-        return;
+        return nullptr;
     }
     if (total > room) {
         jni_throw(env, ("prompt of " + std::to_string(total) +
                         " tokens exceeds the context window (n_ctx=" +
                         std::to_string((int32_t) llama_n_ctx(s->ctx)) +
                         ", maxTokens=" + std::to_string(maxTokens) + ")").c_str());
-        return;
+        return nullptr;
     }
 
     if (!decode_tokens_at(s, tokens, prefix_len, true)) {
         std::string message = "prompt decoding failed";
         if (!g_last_error.empty()) message += ": " + g_last_error;
         jni_throw(env, message.c_str());
-        return;
+        return nullptr;
     }
 
     // --- sampler chain ---
@@ -400,6 +420,11 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     }
 
     llama_sampler_free(smpl);
+
+    const llama_perf_context_data perf1 = llama_perf_context(s->ctx);
+    double diff[4];
+    perf_diff(perf0, perf1, diff);
+    return perf_to_jdoublearray(env, diff);
 }
 
 // Load the mmproj vision encoder (image->embeddings) for a vision-capable model.
@@ -438,7 +463,7 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadVisionModel(
 // Image -> text generation: the prompt text must contain the <image> marker where the
 // image tokens are inserted. Uses the mtmd helper to process text + image chunks, then the
 // standard sampling loop.
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
         JNIEnv* env, jobject,
         jlong handle, jstring jPrompt, jbyteArray jImage,
@@ -449,13 +474,15 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
     LlamaSession* s = lookup_session(handle);
     if (!s || !s->model || !s->ctx || !s->mm) {
         jni_throw(env, "vision model not loaded");
-        return;
+        return nullptr;
     }
     std::lock_guard<std::mutex> lock(s->session_mutex);
     s->stop = false;
 
     const llama_vocab* vocab = llama_model_get_vocab(s->model);
-    if (!vocab) return;
+    if (!vocab) return nullptr;
+
+    const llama_perf_context_data perf0 = llama_perf_context(s->ctx);
 
     const char* prompt = env->GetStringUTFChars(jPrompt, nullptr);
     std::string text(prompt ? prompt : "");
@@ -480,21 +507,21 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
 
     if (bw.bitmap == nullptr) {
         jni_throw(env, "failed to decode image");
-        return;
+        return nullptr;
     }
 
     const mtmd_bitmap* bitmaps[1] = { bw.bitmap };
     if (mtmd_tokenize(s->mm, chunks.ptr.get(), &inp, bitmaps, 1) != 0) {
         mtmd_bitmap_free(bw.bitmap);
         jni_throw(env, "vision prompt tokenization failed");
-        return;
+        return nullptr;
     }
 
     llama_pos n_past = 0;
     if (mtmd_helper_eval_chunks(s->mm, s->ctx, chunks.ptr.get(), 0, 0, s->n_batch, true, &n_past) != 0) {
         mtmd_bitmap_free(bw.bitmap);
         jni_throw(env, "vision prompt decoding failed");
-        return;
+        return nullptr;
     }
     mtmd_bitmap_free(bw.bitmap);
 
@@ -542,6 +569,11 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
         }
     }
     llama_sampler_free(smpl);
+
+    const llama_perf_context_data perf1 = llama_perf_context(s->ctx);
+    double diff[4];
+    perf_diff(perf0, perf1, diff);
+    return perf_to_jdoublearray(env, diff);
 }
 
 extern "C" JNIEXPORT void JNICALL

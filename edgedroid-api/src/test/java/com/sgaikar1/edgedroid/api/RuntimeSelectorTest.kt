@@ -2,6 +2,7 @@ package com.sgaikar1.edgedroid.api
 
 import com.sgaikar1.edgedroid.common.FailureKind
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.ModelFormat
 import com.sgaikar1.edgedroid.common.SdkResult
 import com.sgaikar1.edgedroid.common.Token
@@ -63,6 +64,7 @@ class RuntimeSelectorTest {
         override suspend fun tokenize(handle: ModelHandle, text: String): List<Int> = emptyList()
         override suspend fun embeddings(handle: ModelHandle, text: String): FloatArray = floatArrayOf()
         override suspend fun stop(handle: ModelHandle) {}
+        override fun stats(): GenerationStats = GenerationStats()
     }
 
     @Test

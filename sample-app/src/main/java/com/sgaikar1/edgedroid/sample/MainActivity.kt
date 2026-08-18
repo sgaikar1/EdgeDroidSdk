@@ -92,6 +92,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val config by viewModel.config.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
+    val streamingMetrics by viewModel.streamingMetrics.collectAsStateWithLifecycle()
     val reasoningText by viewModel.reasoningText.collectAsStateWithLifecycle()
     val progress by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -242,6 +243,16 @@ fun ChatScreen(viewModel: ChatViewModel) {
             }
             streamingText?.let { current ->
                 item { MessageBubble(ChatMessage("assistant", current)) }
+            }
+            streamingMetrics?.let { metrics ->
+                item {
+                    Text(
+                        text = metrics,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    )
+                }
             }
             item {
                 if (isLoading || (engineState == LlmEngineState.Generating &&

@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.runtime.llama
 
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.Token
 import com.sgaikar1.edgedroid.core.Model
@@ -9,6 +10,7 @@ import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.Runtime
 import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimeState
+import com.sgaikar1.edgedroid.core.StreamMetricsTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Concrete [Runtime] over llama.cpp. Implements only the interface — the SDK never reaches
@@ -30,6 +33,12 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
     private var initialized = false
     private var gpuDeviceCount = 0
     private val tokenCounter = AtomicLong(0)
+
+    // Cumulative generation stats for this session (since load). Updated as a side effect of
+    // generate() from llama.cpp's own llama_perf_* counters.
+    private val stats = AtomicReference(GenerationStats())
+
+    override fun stats(): GenerationStats = stats.get()
 
     override suspend fun initialize() {
         if (initialized) return
@@ -99,11 +108,21 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
         options: GenerationOptions,
     ): Flow<Token> = callbackFlow {
         var index = 0L
+        val metrics = StreamMetricsTracker()
         val callback = NativeLlama.TokenCallback { text ->
-            trySend(Token(index = index, id = tokenCounter.getAndIncrement(), text = text))
+            trySend(
+                Token(
+                    index = index,
+                    id = tokenCounter.getAndIncrement(),
+                    text = text,
+                    metrics = metrics.onToken(),
+                ),
+            )
             index++
         }
-        withContext(Dispatchers.Default) {
+        // Native perf for this call: [t_p_eval_ms, t_eval_ms, n_p_eval, n_eval] from
+        // llama_perf_context, diffed inside the JNI layer so each call is self-contained.
+        val perf = withContext(Dispatchers.Default) {
             val image = prompt.attachments.firstOrNull()
             if (image != null) {
                 // Vision path: the text must contain the <image> marker; insert it if absent.
@@ -143,6 +162,22 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
                     callback = callback,
                 )
             }
+        }
+        if (perf != null && perf.size >= 4) {
+            stats.updateAndGet { previous ->
+                previous + GenerationStats(
+                    promptTokens = perf[2].toLong(),
+                    evalTokens = perf[3].toLong(),
+                    promptMs = perf[0].toLong(),
+                    evalMs = perf[1].toLong(),
+                )
+            }
+            config.log.log(
+                LogProvider.Level.INFO, TAG,
+                "generation: eval=${perf[3].toLong()} tok in ${"%.0f".format(perf[1])} ms" +
+                    " (${"%.1f".format(perf[3] * 1000.0 / perf[1].coerceAtLeast(1.0))} tok/s)," +
+                    " prompt=${perf[2].toLong()} tok in ${"%.0f".format(perf[0])} ms",
+            )
         }
         close()
     }
