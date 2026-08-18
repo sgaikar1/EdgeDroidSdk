@@ -314,7 +314,7 @@ we want to grow — all great places to contribute:
 | **Tool calling / function calling** | reserved `Capability.TOOL_CALLING`; runtime-agnostic tool loop + JSON parsing |
 | **Structured output / grammar** | `Capability.JSON_MODE` / `GRAMMAR` — llama.cpp grammar support is available but not wired |
 | **Smarter sessions** | auto-trim chat history to the context window instead of manual `resetChat()` |
-| **More chat templates** | ChatML, Qwen, Llama, raw exist — add Gemma, Mistral, Phi, etc. via `PromptProcessor` |
+| **More chat templates** | ChatML, Qwen, Llama, Gemma, Mistral, Phi, DeepSeek and Aya are built in — more can be added by extending `PromptProcessor` |
 | **Reasoning display** | the sample splits reasoning vs answer for `<|reasoning_start|>`/`think` models — more marker conventions welcome |
 | **iOS / KMP** | the SPI is platform-agnostic; a Kotlin Multiplatform port of common/core + a Metal runtime is the natural next step |
 | **Vision breadth** | more VLMs, batched images, per-model `pixel_values` params |
