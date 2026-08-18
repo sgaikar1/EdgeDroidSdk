@@ -2,11 +2,11 @@ package com.sgaikar1.edgedroid.core
 
 /**
  * Renders structured chat history into a single model-ready prompt string. Templates are
- * swappable (ChatML, Qwen, Llama, raw) and chosen from model metadata — the SDK core does not
- * hardcode any vendor format.
+ * swappable (ChatML, Qwen, Llama, Gemma, Mistral, Phi, DeepSeek, Aya, raw) and chosen from
+ * model metadata — the SDK core does not hardcode any vendor format.
  */
 interface PromptProcessor {
-    enum class Template { CHATML, QWEN, LLAMA, RAW }
+    enum class Template { CHATML, QWEN, LLAMA, GEMMA, MISTRAL, PHI, DEEPSEEK, AYA, RAW }
 
     fun templateFor(model: Model): Template
     fun build(template: Template, messages: List<Message>, systemPrompt: String? = null): String
