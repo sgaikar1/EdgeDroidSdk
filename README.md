@@ -316,7 +316,7 @@ we want to grow — all great places to contribute:
 | **Smarter sessions** | auto-trim chat history to the context window instead of manual `resetChat()` |
 | **More chat templates** | ChatML, Qwen, Llama, raw exist — add Gemma, Mistral, Phi, etc. via `PromptProcessor` |
 | **Reasoning display** | the sample splits reasoning vs answer for `<|reasoning_start|>`/`think` models — more marker conventions welcome |
-| **iOS / KMP** | the SPI is platform-agnostic; a Kotlin Multiplatform port of common/core + a Metal runtime is the natural next step |
+| **iOS / KMP** | `common` + `core` are now Kotlin Multiplatform and compile/link for `iosArm64` (see [docs/kmp-ios-feasibility.md](docs/kmp-ios-feasibility.md)). The remaining port is a Metal runtime behind the existing `RuntimePlugin` SPI, an iOS `Downloader` (URLSession), and an iOS app facade |
 | **Vision breadth** | more VLMs, batched images, per-model `pixel_values` params |
 | **Perf & GPU** | device-specific Vulkan tuning, better defaults, NNAPI/GPU delegates |
 

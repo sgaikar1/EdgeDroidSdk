@@ -30,8 +30,7 @@ sealed class GpuConfig {
     }
 
     companion object {
-        /** Convenience for [Layers]. */
-        @JvmStatic
+        /** Convenience for [Layers]. (No @JvmStatic in common code; Java callers use Companion.) */
         fun layers(n: Int): GpuConfig = Layers(n)
     }
 }

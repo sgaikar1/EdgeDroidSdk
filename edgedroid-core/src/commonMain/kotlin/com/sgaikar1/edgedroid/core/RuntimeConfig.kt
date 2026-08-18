@@ -34,7 +34,7 @@ data class ThreadingConfig(
          * aggressive OEM process watchdogs (e.g. ColorOS killing >90% CPU apps).
          */
         private fun deviceThreadCount(maxCores: Int): Int =
-            java.lang.Runtime.getRuntime().availableProcessors().coerceIn(2, maxCores)
+            availableProcessors().coerceIn(2, maxCores)
     }
 }
 
