@@ -145,6 +145,21 @@ class EdgeDroid private constructor(
     fun resetChat() = engine.resetSession()
 
     /**
+     * Replace the conversation state wholesale (system prompt + message history) without
+     * generating anything. Server/import integrations receive an external conversation
+     * (e.g. an OpenAI-style message array) and need the SDK's session to reflect it before
+     * calling [stream] or [generate].
+     *
+     * [systemPrompt] replaces the current system prompt when non-null. [messages] is a list
+     * of `(role, text)` pairs where `role` is `"user"` or `"assistant"` (`"system"` entries
+     * are applied as the system prompt). The session is reset first, so this is safe to call
+     * for every externally-supplied conversation.
+     */
+    fun seedChat(systemPrompt: String?, messages: List<Pair<String, String>>) {
+        engine.seedSession(systemPrompt, messages)
+    }
+
+    /**
      * Model acquisition / management surface.
      */
     inner class ModelFacade {

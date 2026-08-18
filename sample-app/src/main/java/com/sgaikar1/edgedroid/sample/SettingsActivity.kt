@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -231,6 +232,39 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                 minLines = 2,
                 maxLines = 4,
             )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Local OpenAI server (localhost only)",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = draft.serverEnabled,
+                    onCheckedChange = { draft = draft.copy(serverEnabled = it) },
+                )
+            }
+            if (draft.serverEnabled) {
+                OutlinedTextField(
+                    value = draft.serverPort.toString(),
+                    onValueChange = { value ->
+                        draft = draft.copy(serverPort = value.toIntOrNull()?.coerceIn(1, 65535) ?: draft.serverPort)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Port") },
+                )
+                Text(
+                    "Serves GET /v1/models, POST /v1/chat/completions (streaming and non-streaming) " +
+                        "and POST /v1/embeddings on 127.0.0.1 only — unreachable from the network. " +
+                        "From a computer use `adb reverse tcp:8080 tcp:8080` first. The server runs " +
+                        "only while the app is in the foreground and ignores any API key.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SliderRow("Retries", draft.maxRetries.toFloat(), 0f..5f, 5, Modifier.weight(1f)) {

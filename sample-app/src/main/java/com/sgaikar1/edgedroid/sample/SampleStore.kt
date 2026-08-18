@@ -6,6 +6,7 @@ import com.sgaikar1.edgedroid.common.ModelFormat
 import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 import com.sgaikar1.edgedroid.core.LlmEngineState
+import com.sgaikar1.edgedroid.server.EdgeDroidOpenAiServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -16,6 +17,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+
+/** Snapshot of the local OpenAI-compatible server shown in the UI. */
+data class ServerUiState(
+    val running: Boolean = false,
+    val url: String? = null,
+    val error: String? = null,
+)
 
 /**
  * Owns the single active [EdgeDroid] and the [SampleConfig] that produced it. Applying a new
@@ -40,6 +48,12 @@ class SampleStore(private val context: Context) {
 
     private val _downloadedIds = MutableStateFlow<Set<String>>(emptySet())
     val downloadedIds: StateFlow<Set<String>> = _downloadedIds.asStateFlow()
+
+    private val _serverState = MutableStateFlow(ServerUiState())
+    val serverState: StateFlow<ServerUiState> = _serverState.asStateFlow()
+
+    @Volatile
+    private var server: EdgeDroidOpenAiServer? = null
 
     @Volatile
     var sdk: EdgeDroid = SdkFactory.build(appContext, _config.value)
@@ -69,8 +83,51 @@ class SampleStore(private val context: Context) {
                 subscribeState()
                 refreshDownloaded()
                 scope.launch { runCatching { old.unload() } }
+                syncServer()
             }.exceptionOrNull()
         }
+
+    // ---- local OpenAI-compatible server ----
+
+    /** App lifecycle hook: restart the server when the app returns to the foreground. */
+    fun onAppForeground() {
+        scope.launch { syncServer() }
+    }
+
+    /** App lifecycle hook: stop the server when the app leaves the foreground. */
+    fun onAppBackground() {
+        scope.launch { syncServer(stopOnly = true) }
+    }
+
+    /**
+     * Reflect [config.serverEnabled] in a running [EdgeDroidOpenAiServer] bound to the
+     * current [sdk]. Called after config changes and on foreground/background transitions.
+     */
+    private fun syncServer(stopOnly: Boolean = false) {
+        val cfg = _config.value
+        val old = server
+        server = null
+        if (old != null) {
+            runCatching { old.stop() }
+        }
+        if (stopOnly || !cfg.serverEnabled) {
+            _serverState.value = ServerUiState()
+            return
+        }
+        val bound = EdgeDroidOpenAiServer(
+            sdk = sdk,
+            port = cfg.serverPort,
+            defaultModelId = cfg.model.id,
+        )
+        try {
+            bound.start()
+            server = bound
+            _serverState.value = ServerUiState(running = true, url = bound.baseUrl)
+        } catch (t: Throwable) {
+            runCatching { bound.stop() }
+            _serverState.value = ServerUiState(error = t.message ?: "Failed to start local server")
+        }
+    }
 
     /** Recompute which configured models are actually on device (file exists). */
     fun refreshDownloaded() {
@@ -127,6 +184,8 @@ class SampleStore(private val context: Context) {
                 topP = o.optDouble("topP", 0.95).toFloat(),
                 topK = o.optInt("topK", 40),
                 systemPrompt = o.optString("systemPrompt", ""),
+                serverEnabled = o.optBoolean("serverEnabled", false),
+                serverPort = o.optInt("serverPort", 8080).coerceIn(1, 65535),
             )
         }.getOrNull() ?: SampleConfig.recommended(capabilities)
     }
@@ -159,6 +218,8 @@ class SampleStore(private val context: Context) {
         o.put("topP", c.topP.toDouble())
         o.put("topK", c.topK)
         o.put("systemPrompt", c.systemPrompt)
+        o.put("serverEnabled", c.serverEnabled)
+        o.put("serverPort", c.serverPort)
         prefs.edit().putString(KEY_CONFIG, o.toString()).apply()
     }
 

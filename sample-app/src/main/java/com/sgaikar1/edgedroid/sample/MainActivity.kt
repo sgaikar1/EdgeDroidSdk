@@ -101,6 +101,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val embeddingResult by viewModel.embeddingResult.collectAsStateWithLifecycle()
     val downloadError by viewModel.downloadError.collectAsStateWithLifecycle()
     val downloadedIds by viewModel.downloadedIds.collectAsStateWithLifecycle()
+    val serverState by viewModel.serverState.collectAsStateWithLifecycle()
     val attachedImage by viewModel.attachedImage.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
@@ -169,6 +170,23 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 text = it,
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        serverState.error?.let {
+            Text(
+                text = "Local server error: $it",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (serverState.running) {
+            Text(
+                text = "OpenAI server: ${serverState.url} — try " +
+                    "`adb reverse tcp:8080 tcp:8080` then " +
+                    "`curl ${serverState.url}/v1/models`",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
 
