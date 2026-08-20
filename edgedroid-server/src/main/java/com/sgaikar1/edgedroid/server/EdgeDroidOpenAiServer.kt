@@ -6,10 +6,12 @@ import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
-import java.io.PipedInputStream
-import java.io.PipedOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +36,11 @@ import kotlinx.coroutines.sync.withLock
  * (or on process teardown). The server serializes generation — EdgeDroid runs one model
  * handle, so concurrent completions queue behind a mutex.
  *
+ * ## Streaming liveness
+ * SSE responses never compress (see [useGzipWhenAccepted]) and each stream is fed through a
+ * bounded pipe: a client that stops reading for [STREAM_WRITE_TIMEOUT_MS] causes the
+ * generation to abort so the generation mutex is released and other endpoints stay responsive.
+ *
  * ## Placement
  * This module is intentionally separate from the sample UI so any app can embed it, and the
  * wire protocol stays unit-testable on the JVM (see [OpenAiProtocol]).
@@ -53,12 +60,21 @@ class EdgeDroidOpenAiServer(
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val generationMutex = Mutex()
-    private val activePipes = CopyOnWriteArraySet<PipedOutputStream>()
+    private val activePipes = CopyOnWriteArraySet<StreamPipe>()
 
     /** Loopback URL clients should point at, e.g. `http://127.0.0.1:8080`. */
     val baseUrl: String get() = "http://127.0.0.1:$port"
 
     val isRunning: Boolean get() = running
+
+    /**
+     * Never gzip responses. NanoHTTPD gzip-compresses any `text/...` response (including
+     * `text/event-stream`) when the client sends `Accept-Encoding: gzip` — which the popular
+     * OpenAI SDKs and browsers all do — and its GZIPOutputStream is not sync-flushed, so small
+     * per-token writes would be buffered into lumps and effectively break SSE streaming.
+     * Localhost payloads are tiny, so compression buys nothing anyway.
+     */
+    override fun useGzipWhenAccepted(r: NanoHTTPD.Response): Boolean = false
 
     /** Bind the loopback socket and start accepting requests. Safe to call once per instance. */
     override fun start() {
@@ -76,8 +92,8 @@ class EdgeDroidOpenAiServer(
         synchronized(lock) {
             if (!running) return
             running = false
-            // Closing the pipes makes in-flight stream writes throw, ending their coroutines.
-            activePipes.forEach { pipe -> runCatching { pipe.close() } }
+            // Closing the pipes unblocks their producers, ending in-flight generations.
+            activePipes.forEach { pipe -> pipe.abort() }
             activePipes.clear()
             super.stop()
             log.log(LogProvider.Level.INFO, TAG, "OpenAI-compatible server stopped")
@@ -132,9 +148,8 @@ class EdgeDroidOpenAiServer(
     }
 
     private fun streamChat(request: OpenAiProtocol.ChatRequest): Response {
-        val pipeOut = PipedOutputStream()
-        val pipeIn = PipedInputStream(pipeOut, STREAM_BUFFER_BYTES)
-        activePipes.add(pipeOut)
+        val pipe = StreamPipe(STREAM_BUFFER_BYTES, STREAM_WRITE_TIMEOUT_MS)
+        activePipes.add(pipe)
         scope.launch {
             try {
                 generationMutex.withLock {
@@ -145,22 +160,27 @@ class EdgeDroidOpenAiServer(
                         options = request.options,
                     ) { token ->
                         val event = OpenAiProtocol.chatChunk(request, token.text, id = STREAM_ID)
-                        pipeOut.write(event.toByteArray(Charsets.UTF_8))
-                        pipeOut.flush()
+                        if (!pipe.offer(event.toByteArray(Charsets.UTF_8))) {
+                            throw IOException("client stopped reading the stream")
+                        }
                     }
-                    pipeOut.write(OpenAiProtocol.chatFinishChunk(request, id = STREAM_ID).toByteArray(Charsets.UTF_8))
-                    pipeOut.write(OpenAiProtocol.doneMarker().toByteArray(Charsets.UTF_8))
-                    pipeOut.flush()
+                    // Best-effort tail; a full pipe here only means the client was already gone.
+                    pipe.offerTail(OpenAiProtocol.chatFinishChunk(request, id = STREAM_ID).toByteArray(Charsets.UTF_8))
+                    pipe.offerTail(OpenAiProtocol.doneMarker().toByteArray(Charsets.UTF_8))
                 }
             } catch (t: Throwable) {
-                // Client disconnect (pipe closed) or generation error; nothing more to stream.
+                // Generation error or slow/disconnected client; nothing more to stream.
                 log.log(LogProvider.Level.DEBUG, TAG, "stream ended: ${t.message ?: t.javaClass.simpleName}")
+                pipe.offerTail(
+                    ("data: " + OpenAiProtocol.errorResponse("stream aborted: ${t.message}") + "\n\n")
+                        .toByteArray(Charsets.UTF_8),
+                )
             } finally {
-                runCatching { pipeOut.close() }
-                activePipes.remove(pipeOut)
+                pipe.finish()
+                activePipes.remove(pipe)
             }
         }
-        val response = NanoHTTPD.newChunkedResponse(Response.Status.OK, "text/event-stream", pipeIn)
+        val response = NanoHTTPD.newChunkedResponse(Response.Status.OK, "text/event-stream", pipe)
         response.addHeader("Cache-Control", "no-cache")
         response.addHeader("X-Accel-Buffering", "no")
         return withCors(response)
@@ -226,9 +246,82 @@ class EdgeDroidOpenAiServer(
         return response
     }
 
-    /** Bounded HTTP worker pool; generation itself is serialized by [generationMutex]. */
+    /**
+     * Bounded, timeout-guarded byte pipe that backs the SSE response. The generation coroutine
+     * [offer]s chunk-sized writes; NanoHTTPD's response sender [read]s them. If the client
+     * stops reading, the queue fills and [offer] fails after [StreamPipe.writeTimeoutMs],
+     * which aborts the generation instead of wedging the generation mutex.
+     */
+    private class StreamPipe(
+        private val capacity: Int,
+        private val writeTimeoutMs: Long,
+    ) : InputStream() {
+        private val queue = LinkedBlockingQueue<ByteArray?>(capacity)
+        @Volatile private var closed = false
+        private var current: ByteArray? = null
+        private var offset = 0
+        private var eof = false
+
+        /** @return false when the pipe stayed full (client not reading) for [writeTimeoutMs]. */
+        fun offer(data: ByteArray): Boolean {
+            if (closed) return false
+            return queue.offer(data, writeTimeoutMs, TimeUnit.MILLISECONDS)
+        }
+
+        /** Best-effort write for tail/error events; never blocks generation forever. */
+        fun offerTail(data: ByteArray?) {
+            if (closed) return
+            if (!queue.offer(data, TAIL_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                // Client is gone — drop the tail and let the reader see EOF.
+                queue.clear()
+                queue.offer(null)
+            }
+        }
+
+        /** Signal EOF to the reader; safe to call once generation finished. */
+        fun finish() {
+            offerTail(null)
+        }
+
+        /** Abort: unblock the reader and make subsequent [offer]s fail immediately. */
+        fun abort() {
+            closed = true
+            queue.clear()
+            queue.offer(null)
+        }
+
+        override fun read(): Int {
+            while (true) {
+                val chunk = current
+                if (chunk != null) {
+                    if (offset < chunk.size) return chunk[offset++].toInt() and 0xFF
+                    current = null
+                    offset = 0
+                }
+                if (eof) return -1
+                val next = queue.take()
+                if (next == null) {
+                    eof = true
+                    return -1
+                }
+                current = next
+                offset = 0
+            }
+        }
+
+        override fun close() {
+            // NanoHTTPD closes the body stream when the socket dies; unblock producers.
+            abort()
+        }
+
+        private companion object {
+            const val TAIL_TIMEOUT_MS = 5_000L
+        }
+    }
+
+    /** Thread-per-connection HTTP workers (idle threads are reaped); generation is serialized separately. */
     private class AsyncRunner : NanoHTTPD.AsyncRunner {
-        private val executor = Executors.newFixedThreadPool(4) { r ->
+        private val executor = Executors.newCachedThreadPool { r ->
             Thread(r, "edgedroid-server-http").apply { isDaemon = true }
         }
 
@@ -248,6 +341,9 @@ class EdgeDroidOpenAiServer(
         private const val DEFAULT_PORT = 8080
         private const val FALLBACK_MODEL_ID = "edgedroid-local"
         private const val STREAM_BUFFER_BYTES = 64 * 1024
+
+        /** How long a full stream pipe (client not reading) waits before the stream is aborted. */
+        private const val STREAM_WRITE_TIMEOUT_MS = 30_000L
 
         /** Stable id reused across all chunks of one streaming completion. */
         private val STREAM_ID = "chatcmpl-local"

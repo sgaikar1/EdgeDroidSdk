@@ -181,9 +181,10 @@ fun ChatScreen(viewModel: ChatViewModel) {
             )
         }
         if (serverState.running) {
+            val port = serverState.port ?: 8080
             Text(
                 text = "OpenAI server: ${serverState.url} — try " +
-                    "`adb reverse tcp:8080 tcp:8080` then " +
+                    "`adb reverse tcp:$port tcp:$port` then " +
                     "`curl ${serverState.url}/v1/models`",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
