@@ -77,7 +77,14 @@ internal class QnnRuntime(
                     "NPU offload unavailable; using CPU/GPU (llama_cpp) hybrid path",
             )
         }
-        GenieXSession.ensureInitialized(appContext, config.log)
+        try {
+            GenieXSession.ensureInitialized(appContext, config.log)
+        } catch (t: Throwable) {
+            // GenieX init is once-per-process and cannot be retried in-process; surface a clear
+            // terminal error instead of hanging on every later load attempt.
+            _state.value = RuntimeState.Error("init", t.message ?: t.javaClass.simpleName)
+            throw t
+        }
         initialized = true
         _state.value = RuntimeState.Initialized
         config.log.log(LogProvider.Level.INFO, TAG, "QNN/GenieX runtime initialized")
@@ -94,6 +101,7 @@ internal class QnnRuntime(
             val computeUnit = model.metadata["computeUnit"]
                 ?: if (model.format == ModelFormat.QNN) ComputeUnitValue.NPU.value else ComputeUnitValue.HYBRID.value
             val mmprojPath = model.metadata["mmprojPath"]
+            val resolvedPath = resolveModelPath(model, path)
 
             val modelConfig = ModelConfig(
                 nCtx = options.memory.contextSize,
@@ -107,7 +115,7 @@ internal class QnnRuntime(
                 val wrapper = LlmWrapper.builder()
                     .llmCreateInput(
                         LlmCreateInput(
-                            model_path = path,
+                            model_path = resolvedPath,
                             config = modelConfig,
                             runtime_id = runtimeId,
                             compute_unit = computeUnit,
@@ -120,7 +128,7 @@ internal class QnnRuntime(
                 val wrapper = VlmWrapper.builder()
                     .vlmCreateInput(
                         VlmCreateInput(
-                            model_path = path,
+                            model_path = resolvedPath,
                             mmproj_path = mmprojPath,
                             config = modelConfig,
                             runtime_id = runtimeId,
@@ -143,6 +151,33 @@ internal class QnnRuntime(
             1L
         }
     }
+
+    /**
+     * GenieX's `qairt` runtime expects a QNN bundle as an **extracted directory**. Remote
+     * downloads arrive as a single archive file — sniff the magic bytes and extract when needed;
+     * pass directories (and non-archive single files) through unchanged.
+     */
+    private fun resolveModelPath(model: Model, path: String): String {
+        if (model.format != ModelFormat.QNN) return path
+        val file = File(path)
+        if (!file.isFile) return path // already a directory (or missing; GenieX will report it)
+        if (!QnnBundleExtractor.looksLikeArchive(file)) {
+            config.log.log(
+                LogProvider.Level.WARN, TAG,
+                "QNN model '${model.id}' is a single non-archive file at $path — GenieX qairt expects " +
+                    "an extracted bundle directory; if this was a remote AI-Hub download, the archive " +
+                    "was not recognized.",
+            )
+            return path
+        }
+        val dest = File(appContext.cacheDir, "edgedroid_qnn_bundles/${sanitizeDirName(model.id)}")
+        val extracted = QnnBundleExtractor.extract(file, dest)
+        config.log.log(LogProvider.Level.INFO, TAG, "Extracted QNN bundle for '${model.id}' to ${extracted.absolutePath}")
+        return extracted.absolutePath
+    }
+
+    private fun sanitizeDirName(id: String): String =
+        id.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "model" }
 
     override suspend fun unload(handle: ModelHandle) {
         withContext(Dispatchers.Default) {

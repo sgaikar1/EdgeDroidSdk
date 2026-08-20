@@ -107,4 +107,16 @@ class HexagonDetectorTest {
         assertTrue(HexagonArch.V81.isNpuCapable)
         assertFalse(HexagonArch.UNKNOWN.isNpuCapable)
     }
+
+    @Test
+    fun `soc model read is guarded for pre-31 apis`() {
+        // Build.SOC_MODEL does not exist below API 31; the guard must not touch the field.
+        assertEquals("", HexagonDetector.socModelForApi(26))
+        assertEquals("", HexagonDetector.socModelForApi(27))
+        assertEquals("", HexagonDetector.socModelForApi(30))
+        // API 31+ reads the framework field (null/"" on the JVM stub) — the point is that it
+        // never throws NoSuchFieldError.
+        HexagonDetector.socModelForApi(31)
+        HexagonDetector.socModelForApi(35)
+    }
 }

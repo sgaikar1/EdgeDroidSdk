@@ -287,7 +287,8 @@ if (qnn.npuSupported) {                       // Snapdragon 8 Elite (v79) / Elit
 
 - **Supported**: GGUF models (GenieX llama_cpp, `hybrid` = per-tensor HTP+CPU) and QNN
   pre-compiled bundles from [Qualcomm AI Hub](https://aihub.qualcomm.com/models/)
-  (`ModelFormat.QNN`, `qairt` NPU backend).
+  (`ModelFormat.QNN`, `qairt` NPU backend). Remote QNN bundle archives (ZIP/`.tar.gz`) are
+  auto-extracted to cache on load; extracted directories can be passed directly via `Model.local`.
 - **Devices**: Hexagon **v79** (Snapdragon 8 Elite, SM8750) and **v81** (8 Elite Gen 5, SM8850)
   get the bundled QNN HTP kernels; v73/v75/v77 run GGUF on CPU/GPU hybrid only. `QnnPlugin`
   exposes `hexagonArch` / `npuSupported` — VULKAN-style capability flags detected at runtime.

@@ -113,8 +113,24 @@ val model = Model.remote(
 ```
 
 QNN pre-compiled bundles from [Qualcomm AI Hub](https://aihub.qualcomm.com/models/) are
-downloaded as an archive; point `Model.remote(…, format = ModelFormat.QNN)` at the bundle's
-model path (or extract it and use `Model.local(path, format = ModelFormat.QNN)`).
+distributed as archives (ZIP / `.tar.gz`) that the GenieX `qairt` runtime expects as an
+**extracted directory**. `runtime-qnn` handles both flows:
+
+```kotlin
+// 1) Remote archive → auto-extracted to cache on first load.
+val model = Model.remote(
+    id = "qwen2.5-0.5b-qnn",
+    url = "…/qwen2.5-0.5b-v1.5-qnn.tar.gz",   // AI-Hub bundle archive
+    format = ModelFormat.QNN,
+)
+
+// 2) Already extracted out-of-band → point straight at the directory.
+val model = Model.local("/data/…/qwen2.5-0.5b-qnn", format = ModelFormat.QNN)
+```
+
+On load, the runtime sniffs the downloaded file: archives are extracted into
+`cacheDir/edgedroid_qnn_bundles/<modelId>/` and that directory is handed to GenieX; directories
+(and non-archive single files, which GenieX will reject) pass through unchanged.
 
 ## Notes & limitations
 
@@ -122,6 +138,8 @@ model path (or extract it and use `Model.local(path, format = ModelFormat.QNN)`)
   `UnsupportedOperationException` for this runtime.
 - **Vision (VLM)**: attach images via `sdk.stream(prompt, images = listOf(PromptAttachment(bytes)))`
   — they are materialized to temp files for GenieX and cleaned up after generation.
+- **GenieX init is once-per-process**: if the native init fails, the runtime records a terminal
+  error (`RuntimeState.Error`) and every later load fails fast instead of re-running a doomed init.
 - **Licensing**: GenieX is BSD-3-Clause with Qualcomm's Terms of Use (see the
   [GenieX repo](https://github.com/qualcomm/GenieX)). It is a runtime dependency, not bundled
   into `runtime-qnn`'s AAR.

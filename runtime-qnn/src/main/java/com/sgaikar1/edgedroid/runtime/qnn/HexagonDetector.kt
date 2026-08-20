@@ -15,19 +15,31 @@ import android.os.Build
 object HexagonDetector {
 
     /**
-     * Detects the arch on the current device. Safe to call from any thread.
+     * Detects the arch on the current device. Safe to call from any thread. Any unexpected
+     * platform quirk degrades to [HexagonArch.UNKNOWN] rather than crashing the caller
+     * (the plugin constructor runs this during `EdgeDroid.Builder.build()`).
      */
-    fun detect(context: Context): HexagonArch {
+    fun detect(context: Context): HexagonArch = runCatching {
         @Suppress("DEPRECATION")
-        return detect(
-            socModel = Build.SOC_MODEL,
+        detect(
+            socModel = socModelForApi(Build.VERSION.SDK_INT),
             hardware = Build.HARDWARE,
             board = Build.BOARD,
             device = Build.DEVICE,
             product = Build.PRODUCT,
             systemSocModel = readSystemProperty("ro.soc.model"),
         )
-    }
+    }.getOrDefault(HexagonArch.UNKNOWN)
+
+    /**
+     * `Build.SOC_MODEL` only exists in the framework `Build` class from API 31 (S) onward.
+     * Reading it on older devices throws [NoSuchFieldError] — an `Error`, which a normal
+     * `runCatching` around *other* statements does not protect against — so the read is
+     * guarded here. On pre-31 APIs detection falls back to the `ro.soc.model` reflection
+     * property and the Qualcomm platform codename classifier.
+     */
+    internal fun socModelForApi(sdkInt: Int): String =
+    if (sdkInt >= Build.VERSION_CODES.S) Build.SOC_MODEL.orEmpty() else ""
 
     /**
      * Pure classifier, injectable for tests. All inputs are best-effort; the detection

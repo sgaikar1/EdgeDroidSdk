@@ -19,17 +19,29 @@ internal object GenieXSession {
     private var initialized = false
 
     /**
+     * Recorded once after the first failed or timed-out init. The GenieX FFI rejects a second
+     * init call, so retrying can never succeed in-process — every later caller gets a fast,
+     * clear failure instead of re-running a doomed init that would block a thread (and the
+     * object monitor) for up to [INIT_TIMEOUT_SECONDS].
+     */
+    @Volatile
+    private var fatalInitError: String? = null
+
+    /**
      * Initializes the GenieX native SDK exactly once per process. Safe to call concurrently;
      * concurrent callers block until the first init completes.
      *
-     * @throws IllegalStateException when the native init fails or times out (30s).
+     * @throws IllegalStateException when the native init fails or times out (30s) — or on every
+     *   subsequent call after such a failure, since the FFI rejects re-init.
      */
     suspend fun ensureInitialized(context: Context, log: LogProvider) {
+        fatalInitError?.let { throw IllegalStateException("GenieX SDK init previously failed: $it") }
         if (initialized) return
         withContext(Dispatchers.Default) {
             if (initialized) return@withContext
             synchronized(this) {
                 if (initialized) return@synchronized
+                fatalInitError?.let { throw IllegalStateException("GenieX SDK init previously failed: $it") }
                 val latch = CountDownLatch(1)
                 var failure: String? = null
                 GenieXSdk.getInstance().init(
@@ -46,9 +58,15 @@ internal object GenieXSession {
                     },
                 )
                 if (!latch.await(INIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                    throw IllegalStateException("GenieX SDK init timed out after $INIT_TIMEOUT_SECONDS s")
+                    val message = "GenieX SDK init timed out after $INIT_TIMEOUT_SECONDS s"
+                    fatalInitError = message
+                    throw IllegalStateException(message)
                 }
-                failure?.let { throw IllegalStateException("GenieX SDK init failed: $it") }
+                failure?.let {
+                    val message = "GenieX SDK init failed: $it"
+                    fatalInitError = message
+                    throw IllegalStateException(message)
+                }
                 initialized = true
                 log.log(LogProvider.Level.INFO, TAG, "GenieX SDK initialized (QNN / Hexagon NPU backend)")
             }
