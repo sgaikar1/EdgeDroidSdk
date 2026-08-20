@@ -14,11 +14,11 @@ kotlin {
         }
         publishLibraryVariants("release")
     }
-    iosArm64()
-    iosSimulatorArm64()
+    // Declare each iOS target exactly once and reuse the references for the framework config.
+    val iosTargets = listOf(iosArm64(), iosSimulatorArm64())
 
     // Export an iOS framework so an Xcode app can consume the SPI (spike proof: this must link).
-    listOf(iosArm64(), iosSimulatorArm64()).forEach { iosTarget ->
+    iosTargets.forEach { iosTarget ->
         iosTarget.binaries.framework {
             baseName = "EdgeDroidCore"
             isStatic = true

@@ -150,7 +150,7 @@ core changes are expected.
 | AGP + KMP androidTarget publishing nuance: `publishLibraryVariants("release")` and the vanniktech `KotlinMultiplatform` publication now differ from the old Android-only publications | Low | Release pipeline (Maven Central publish) must be exercised once before shipping; no secrets/CI touched by the spike. |
 | Kotlin/Native toolchain download (~1.9 GB) and macOS-only Apple targets | Low | CI for iOS must run on macOS runners; Android CI unaffected (Apple targets are skipped/lazy on non-mac hosts). |
 | `runtime-llama`/`runtime-onnx` remain Android JNI modules — no iOS inference until replaced | High | Sequence the port: core+common first (done), then a Metal runtime module, then iOS storage/download, then the iOS facade. |
-| Java-caller surface change: `@JvmStatic` dropped from `GpuConfig.layers` | Low | Kotlin API unchanged; document if any Java consumers exist. |
+| Java-caller surface change: `@JvmStatic` dropped from `GpuConfig.layers` | Low | Kotlin API unchanged; JVM static surface preserved via `GpuConfigCompat.layers(int)` (`androidMain`). **Must be called out in the next release notes** — see below. |
 
 ## Timeline estimate
 
@@ -167,6 +167,21 @@ Assumes one engineer, macOS host, no prior KMP/iOS experience assumed beyond thi
 
 **Total: 3–5 engineer-weeks** to a feature-parity iOS SDK (stream/generate + downloads),
 with Phase 2 being the dominant risk and the first thing to de-risk.
+
+## Release / migration notes (for the next Maven Central publish)
+
+This spike ships in the same `0.9.0` version line as the KMP restructure. The only
+user-visible breaking change is for **Java consumers of `edgedroid-core`**:
+
+- `GpuConfig.layers(int)` (JVM static from `@JvmStatic`) no longer exists on the class —
+  `GpuConfig` moved to `commonMain` where `@JvmStatic` is unavailable.
+- Replacement: `GpuConfigCompat.layers(int)` (`androidMain`). Kotlin callers are unaffected
+  (`GpuConfig.layers(n)` still resolves to the companion function).
+- Suggested release-note wording: *"edgedroid-core is now Kotlin Multiplatform. Java callers
+  of `GpuConfig.layers(int)` should migrate to `GpuConfigCompat.layers(int)`."*
+
+If a fully binary-compatible publish is required instead, bump `sdkVersion` (minor/major per
+semver) before the next release so the old artifact remains the last `0.9.x`.
 
 ## Files changed by the spike
 
