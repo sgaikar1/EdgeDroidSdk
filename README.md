@@ -29,6 +29,7 @@ Your Android App
 ## ✨ Features
 
 - **llama.cpp** — GGUF chat models with **Vulkan GPU** (auto fallback to CPU)
+- **Qualcomm Hexagon NPU** — GGUF/QNN models on Snapdragon 8 Elite (v79/v81) via the GenieX SDK (`runtime-qnn`)
 - **Image → text** 🖼️ — attach a photo, ask "what's in this picture?" (SmolVLM / LLaVA-style)
 - **ONNX Runtime** — embeddings, no-KV LLM generation, `pixel_values` vision
 - **Reliable downloads** — foreground service keeps big model downloads alive in the
@@ -59,6 +60,7 @@ dependencies {
     implementation("io.github.sgaikar1:edgedroid-api:0.9.0")
     implementation("io.github.sgaikar1:runtime-llama:0.9.0")   // llama.cpp
     // or implementation("io.github.sgaikar1:runtime-onnx:0.9.0") // ONNX Runtime
+    // or implementation("io.github.sgaikar1:runtime-qnn:0.9.0")  // Qualcomm Hexagon NPU (QNN/GenieX, minSdk 27)
 }
 ```
 
@@ -75,6 +77,7 @@ ships the **one ABI** for the device, so the real on-device cost is about half t
 | `edgedroid-common` / `core` / `api` / `storage` / `download` | ~0.2 MB total | pure Kotlin |
 | `runtime-llama` | ~39 MB | llama.cpp + Vulkan + vision (mmproj); ~30 MB per-ABI in an APK |
 | `runtime-onnx` | ~0.1 MB | ONNX Runtime `.so`s come from the onnxruntime-android dependency |
+| `runtime-qnn` | ~0.1 MB | GenieX (QNN) `.so`s come from the geniex-android dependency (~81 MB AAR) |
 
 A chat-only app adding `edgedroid-api` + `runtime-llama` adds roughly **~30 MB** to the APK.
 
@@ -245,6 +248,7 @@ if (modelSize + 256MB > caps.freeStorageBytes) { /* won't fit — don't download
 | --- | --- | --- | --- |
 | `runtime-llama` | GGUF | STREAMING, VISION | CPU + Vulkan GPU auto-fallback, mmproj image→text |
 | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM |
+| `runtime-qnn` | GGUF, QNN | STREAMING, VISION | Qualcomm Hexagon NPU (QNN/GenieX) on Snapdragon 8 Elite (v79/v81); CPU/GPU hybrid elsewhere. minSdk 27, arm64-v8a |
 
 **Add your own** — implement the SPI, register it, done:
 
@@ -265,6 +269,32 @@ No `if (runtime == ...)` anywhere — the SDK dispatches purely on plugin metada
 Automatic: **Vulkan GPU when available, otherwise CPU**. Override with `.memory { gpu(GPU.CPU) }`,
 `GPU.ALL`, or `GPU.Layers(n)`. The SDK detects real Vulkan devices at runtime and retries on CPU
 if a driver fails.
+
+## 🔷 Hexagon NPU (Qualcomm)
+
+On Snapdragon flagships the **Hexagon NPU** beats CPU and Vulkan GPU for LLM inference.
+`runtime-qnn` brings it into the same `EdgeDroid` API via Qualcomm's open-source **GenieX** SDK:
+
+```kotlin
+val qnn = QnnPlugin(context)
+if (qnn.npuSupported) {                       // Snapdragon 8 Elite (v79) / Elite Gen 5 (v81)
+    EdgeDroid.Builder(context)
+        .registerRuntime(qnn)                 // AUTO routes GGUF/QNN models to the NPU
+        .model(Model.remote(id = "…", url = "…", format = ModelFormat.GGUF))
+        .build()
+}
+```
+
+- **Supported**: GGUF models (GenieX llama_cpp, `hybrid` = per-tensor HTP+CPU) and QNN
+  pre-compiled bundles from [Qualcomm AI Hub](https://aihub.qualcomm.com/models/)
+  (`ModelFormat.QNN`, `qairt` NPU backend). Remote QNN bundle archives (ZIP/`.tar.gz`) are
+  auto-extracted to cache on load; extracted directories can be passed directly via `Model.local`.
+- **Devices**: Hexagon **v79** (Snapdragon 8 Elite, SM8750) and **v81** (8 Elite Gen 5, SM8850)
+  get the bundled QNN HTP kernels; v73/v75/v77 run GGUF on CPU/GPU hybrid only. `QnnPlugin`
+  exposes `hexagonArch` / `npuSupported` — VULKAN-style capability flags detected at runtime.
+- **minSdk 27** and **arm64-v8a** only (required by the GenieX AAR).
+- See [`runtime-qnn/README.md`](runtime-qnn/README.md) for the full device table and model
+  metadata knobs (`geniexRuntime`, `computeUnit`, `mmprojPath`).
 
 ## 📱 Sample app
 

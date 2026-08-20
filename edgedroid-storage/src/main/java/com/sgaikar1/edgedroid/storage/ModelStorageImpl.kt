@@ -119,6 +119,7 @@ class ModelStorageImpl(
             ModelFormat.TFLITE -> ".tflite"
             ModelFormat.MNN -> ".mnn"
             ModelFormat.ONNX -> ".onnx"
+            ModelFormat.QNN -> ".bin"
             ModelFormat.CUSTOM -> ".bin"
         }
     }

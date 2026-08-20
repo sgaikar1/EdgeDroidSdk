@@ -14,5 +14,8 @@ enum class ModelFormat {
     TFLITE,
     MNN,
     ONNX,
+
+    /** Qualcomm AI Engine Direct (QNN) pre-compiled bundle (e.g. from Qualcomm AI Hub). */
+    QNN,
     CUSTOM,
 }
