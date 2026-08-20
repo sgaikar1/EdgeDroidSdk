@@ -12,6 +12,14 @@ licenses are recorded below.
   - `runtime-onnx/src/test/resources/all-minilm-tokenizer.json`
 - **License:** Apache License 2.0
 
+## Kokoro-82M — default TTS voice
+
+- **Source:** https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX (base model:
+  https://huggingface.co/hexgrad/Kokoro-82M)
+- **File redistributed in this repo:**
+  - `runtime-tts/src/main/assets/voices/af_heart.bin` (default voice style vector)
+- **License:** Apache License 2.0
+
 ### Apache License 2.0
 
 ```

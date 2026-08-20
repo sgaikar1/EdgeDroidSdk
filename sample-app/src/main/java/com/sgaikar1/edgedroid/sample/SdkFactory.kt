@@ -8,6 +8,7 @@ import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.runtime.llama.LlamaPlugin
 import com.sgaikar1.edgedroid.runtime.onnx.OnnxPlugin
+import com.sgaikar1.edgedroid.runtime.tts.KokoroTtsPlugin
 import java.io.File
 import kotlin.time.Duration.Companion.seconds
 
@@ -37,6 +38,7 @@ object SdkFactory {
                 maxRetries(config.maxRetries)
                 timeout(config.downloadTimeoutSeconds.seconds)
             }
+            .tts(KokoroTtsPlugin(), ttsModel(context))
             .logging(logger)
 
         when (model.runtime) {
@@ -94,5 +96,29 @@ object SdkFactory {
             file.writeBytes(source)
         }
         return file
+    }
+
+    /**
+     * Kokoro TTS model. The default voice (`af_heart.bin`) ships with the `runtime-tts` module
+     * as an asset; we copy it to app storage once and point the runtime at it via
+     * `metadata['voicePath']`. The ~86 MB ONNX model itself is downloaded on demand by the SDK
+     * the first time [com.sgaikar1.edgedroid.api.EdgeDroid.speak] is called.
+     */
+    private fun ttsModel(context: Context): Model {
+        val voice = File(context.filesDir, "kokoro-af_heart.bin")
+        if (!voice.exists()) {
+            context.assets.open("voices/af_heart.bin").use { input ->
+                voice.writeBytes(input.readBytes())
+            }
+        }
+        val k = SampleModels.KOKORO_TTS
+        return Model.remote(
+            id = k.id,
+            name = k.label,
+            url = k.url,
+            sizeBytes = k.sizeBytes,
+            format = k.format,
+            metadata = k.metadata + mapOf("voicePath" to voice.absolutePath),
+        )
     }
 }

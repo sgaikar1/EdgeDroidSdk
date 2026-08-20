@@ -6,6 +6,8 @@ import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.SdkResult
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TtsAudio
+import com.sgaikar1.edgedroid.common.TtsSpeech
 import com.sgaikar1.edgedroid.core.LlmEngine
 import com.sgaikar1.edgedroid.core.LlmEngineState
 import com.sgaikar1.edgedroid.core.MemoryConfig
@@ -119,6 +121,50 @@ class EdgeDroid private constructor(
     suspend fun embeddings(text: String): FloatArray = engine.embeddings(text)
 
     /**
+     * True when an AUDIO (text-to-speech) runtime was configured via [Builder.tts]. Guards the
+     * [speak] / [synthesize] / [synthesizeWav] calls so apps can hide the voice UI otherwise.
+     */
+    val ttsAvailable: Boolean
+        get() = engine.ttsAvailable
+
+    /**
+     * Synthesize [text] to audio using the configured TTS runtime (Capability.AUDIO), then play
+     * it back with a float `AudioTrack`. Returns the synthesized [TtsAudio] (raw 24 kHz mono
+     * samples) so the caller can also save it as WAV via [TtsAudio.toWav].
+     *
+     * Requires a TTS plugin+model registered via [Builder.tts]; otherwise throws
+     * [UnsupportedOperationException].
+     */
+    suspend fun speak(
+        text: String,
+        voice: String = TtsSpeech.DEFAULT_VOICE,
+        speed: Float = 1f,
+    ): TtsAudio {
+        val audio = engine.synthesize(text, voice, speed)
+        com.sgaikar1.edgedroid.api.internal.AudioPlayer.play(audio)
+        return audio
+    }
+
+    /**
+     * Synthesize [text] and return raw samples without playing them. See [speak].
+     */
+    suspend fun synthesize(
+        text: String,
+        voice: String = TtsSpeech.DEFAULT_VOICE,
+        speed: Float = 1f,
+    ): TtsAudio = engine.synthesize(text, voice, speed)
+
+    /**
+     * Synthesize [text] and return a complete 16-bit PCM WAV file (RIFF) at the model's native
+     * sample rate (24 kHz for Kokoro). See [speak].
+     */
+    suspend fun synthesizeWav(
+        text: String,
+        voice: String = TtsSpeech.DEFAULT_VOICE,
+        speed: Float = 1f,
+    ): ByteArray = engine.synthesize(text, voice, speed).toWav()
+
+    /**
      * Interrupt an in-flight generation.
      */
     suspend fun stop() = engine.stop()
@@ -187,6 +233,8 @@ class EdgeDroid private constructor(
         private var logProvider: LogProvider = LogProvider.NO_OP
         private val plugins = mutableListOf<RuntimePlugin>()
         private val extras = mutableMapOf<String, Any>()
+        private var ttsPlugin: RuntimePlugin? = null
+        private var ttsModel: Model? = null
 
         fun runtime(spec: RuntimeSpec): Builder = apply { this.runtimeSpec = spec }
         fun model(model: Model): Builder = apply { this.model = model }
@@ -208,6 +256,17 @@ class EdgeDroid private constructor(
 
         fun logging(provider: LogProvider): Builder = apply { this.logProvider = provider }
         fun registerRuntime(plugin: RuntimePlugin): Builder = apply { plugins.add(plugin) }
+
+        /**
+         * Register a text-to-speech runtime and its model, enabling [speak]/[synthesize]/
+         * [synthesizeWav]. [plugin] must declare [Capability.AUDIO] (e.g.
+         * `KokoroTtsPlugin()`); [model] is the downloaded ONNX TTS model, with voice files
+         * located via `Model.metadata['voicesDir']` or `Model.metadata['voicePath']`.
+         */
+        fun tts(plugin: RuntimePlugin, model: Model): Builder = apply {
+            this.ttsPlugin = plugin
+            this.ttsModel = model
+        }
 
         fun build(): EdgeDroid {
             val log = logProvider
@@ -268,6 +327,8 @@ class EdgeDroid private constructor(
                     checker.check(m).errors.firstOrNull()?.message
                 },
                 log = log,
+                ttsPlugin = ttsPlugin,
+                ttsModel = ttsModel,
             )
 
             log.log(LogProvider.Level.INFO, "EdgeDroid", "EdgeDroid SDK built")

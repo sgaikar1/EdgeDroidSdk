@@ -54,6 +54,9 @@ class ChatViewModel(
     private val _embeddingResult = MutableStateFlow<String?>(null)
     val embeddingResult: StateFlow<String?> = _embeddingResult.asStateFlow()
 
+    private val _ttsStatus = MutableStateFlow<String?>(null)
+    val ttsStatus: StateFlow<String?> = _ttsStatus.asStateFlow()
+
     private val _downloadError = MutableStateFlow<String?>(null)
     val downloadError: StateFlow<String?> = _downloadError.asStateFlow()
 
@@ -190,6 +193,30 @@ class ChatViewModel(
             nb += b[i] * b[i]
         }
         return dot / (kotlin.math.sqrt(na) * kotlin.math.sqrt(nb))
+    }
+
+    // ---- text-to-speech (Kokoro via runtime-tts) ----
+
+    /**
+     * Synthesize [text] with the configured TTS runtime and play it. The first call also
+     * downloads the ~86 MB Kokoro model (blocking until done), so we surface that via [ttsStatus].
+     */
+    fun speak(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            _ttsStatus.value = "Speaking… (first use downloads the Kokoro model)"
+            _error.value = null
+            try {
+                val audio = sdk.speak(trimmed)
+                _ttsStatus.value = "Spoke ${audio.durationMillis} ms @ ${audio.sampleRate} Hz"
+                Log.d("EdgeDroid.Sample", "TTS: ${audio.samples.size} samples @ ${audio.sampleRate} Hz")
+            } catch (t: Throwable) {
+                _ttsStatus.value = null
+                _error.value = "TTS failed: ${t.message}"
+                Log.e("EdgeDroid.Sample", "TTS failed", t)
+            }
+        }
     }
 
     // ---- model lifecycle ----
