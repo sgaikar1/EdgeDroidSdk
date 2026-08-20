@@ -30,7 +30,7 @@ Your Android App
 
 - **llama.cpp** — GGUF chat models with **Vulkan GPU** (auto fallback to CPU)
 - **Image → text** 🖼️ — attach a photo, ask "what's in this picture?" (SmolVLM / LLaVA-style)
-- **ONNX Runtime** — embeddings, no-KV LLM generation, `pixel_values` vision
+- **ONNX Runtime** — embeddings, `pixel_values` vision, and **KV-cache multi-turn chat** via ONNX Runtime GenAI
 - **Reliable downloads** — foreground service keeps big model downloads alive in the
   background (progress notification + pause/resume + sha256 verification)
 - **Private/gated models** — auth headers for Hugging Face gated repos, Git LFS, corporate storage
@@ -244,7 +244,7 @@ if (modelSize + 256MB > caps.freeStorageBytes) { /* won't fit — don't download
 | Runtime | Formats | Capabilities | Notes |
 | --- | --- | --- | --- |
 | `runtime-llama` | GGUF | STREAMING, VISION | CPU + Vulkan GPU auto-fallback, mmproj image→text |
-| `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM |
+| `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + `pixel_values` vision + GenAI KV-cache chat |
 
 **Add your own** — implement the SPI, register it, done:
 
@@ -310,7 +310,7 @@ we want to grow — all great places to contribute:
 | Area | Details |
 | --- | --- |
 | **More runtimes** | ExecuTorch (PTE), LiteRT/TFLite, MNN — each is a new `RuntimePlugin` module, no core changes |
-| **ONNX LLM + KV cache** | raw-ORT generation is no-KV today; full KV-cache chat needs ONNX Runtime GenAI |
+| ~~**ONNX LLM + KV cache**~~ | ✅ done — KV-cache multi-turn chat via ONNX Runtime GenAI (`runtime-onnx/libs`) |
 | **Tool calling / function calling** | reserved `Capability.TOOL_CALLING`; runtime-agnostic tool loop + JSON parsing |
 | **Structured output / grammar** | `Capability.JSON_MODE` / `GRAMMAR` — llama.cpp grammar support is available but not wired |
 | **Smarter sessions** | auto-trim chat history to the context window instead of manual `resetChat()` |

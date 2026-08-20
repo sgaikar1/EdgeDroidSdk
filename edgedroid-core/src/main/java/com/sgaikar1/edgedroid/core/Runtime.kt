@@ -30,5 +30,12 @@ interface Runtime {
     suspend fun tokenize(handle: ModelHandle, text: String): List<Int>
     suspend fun embeddings(handle: ModelHandle, text: String): FloatArray
     suspend fun stop(handle: ModelHandle)
+
+    /**
+     * Reset any session-scoped state (e.g. a KV cache) without unloading the model, so a new
+     * conversation starts from an empty context. Default no-op for stateless runtimes.
+     */
+    fun resetSession(handle: ModelHandle) = Unit
+
     val state: StateFlow<RuntimeState>
 }

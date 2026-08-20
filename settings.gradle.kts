@@ -16,6 +16,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Vendored ONNX Runtime GenAI Android AAR (not on a public Maven repo). See
+        // repo/README.md and THIRD_PARTY_NOTICES.md.
+        maven { url = uri("$rootDir/repo") }
     }
 }
 

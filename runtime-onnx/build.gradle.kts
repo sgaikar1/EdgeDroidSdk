@@ -35,6 +35,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.onnxruntime.android)
+    // ONNX Runtime GenAI (Java/Android bindings) for KV-cache multi-turn chat. Not on a public
+    // Maven repo; the AAR is vendored under repo/ (see THIRD_PARTY_NOTICES.md and repo/README.md).
+    implementation(libs.onnxruntime.genai.android)
     testImplementation(libs.junit)
 }
 

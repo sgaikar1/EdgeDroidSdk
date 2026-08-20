@@ -42,6 +42,9 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
     private var visionWidth = 224
     private var visionHeight = 224
 
+    /** KV-cache chat driver used when the loaded model is an ONNX Runtime GenAI model. */
+    private var genAi: GenAiLlm? = null
+
     override suspend fun initialize() {
         if (env != null) return
         withContext(Dispatchers.Default) {
@@ -56,24 +59,50 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             "Model '${model.id}' has no local path — ensure it is downloaded before load",
         )
         val handle = withContext(Dispatchers.Default) {
-            val e = env ?: throw IllegalStateException("Runtime not initialized")
-            val sessionOptions = buildSessionOptions(options)
-            val t0 = System.currentTimeMillis()
-            val s = e.createSession(path, sessionOptions)
-            config.log.log(LogProvider.Level.INFO, TAG, "OrtSession created in ${System.currentTimeMillis() - t0} ms")
-            session?.close()
-            session = s
-            tokenizer = loadTokenizer(model, path)
-            val tok = tokenizer
-            eosTokenId = if (tok == null) null else {
-                val explicit = model.metadata["eosToken"]?.let(tok::tokenId)
-                explicit ?: tok.findEosTokenId()
+            currentModelMetadata = model.metadata
+            if (isGenAiModel(model, path)) {
+                // ONNX Runtime GenAI chat model: KV-cache chat only. Drop any previous raw session.
+                session?.close(); session = null
+                tokenizer = null
+                genAi?.unload()
+                genAi = GenAiLlm(config.log).also { it.load(modelDir(path)) }
+                1L
+            } else {
+                val e = env ?: throw IllegalStateException("Runtime not initialized")
+                val sessionOptions = buildSessionOptions(options)
+                val t0 = System.currentTimeMillis()
+                val s = e.createSession(path, sessionOptions)
+                config.log.log(LogProvider.Level.INFO, TAG, "OrtSession created in ${System.currentTimeMillis() - t0} ms")
+                session?.close()
+                session = s
+                tokenizer = loadTokenizer(model, path)
+                val tok = tokenizer
+                eosTokenId = if (tok == null) null else {
+                    val explicit = model.metadata["eosToken"]?.let(tok::tokenId)
+                    explicit ?: tok.findEosTokenId()
+                }
+                detectVisionInput(s)
+                1L
             }
-            detectVisionInput(s)
-            1L
         }
         _state.value = RuntimeState.ModelLoaded
         return handle
+    }
+
+    /**
+     * A model is treated as ONNX Runtime GenAI when its metadata opts in via `genai=true`, or when
+     * the local path is a directory that carries a GenAI manifest (`genai_config.json`/`config.json`).
+     */
+    private fun isGenAiModel(model: Model, path: String): Boolean {
+        if (model.metadata["genai"] == "true") return true
+        val dir = File(path)
+        if (!dir.isDirectory) return false
+        return File(dir, "genai_config.json").isFile || File(dir, "config.json").isFile
+    }
+
+    private fun modelDir(path: String): String {
+        val f = File(path)
+        return if (f.isDirectory) f.absolutePath else f.parentFile?.absolutePath ?: path
     }
 
     private fun buildSessionOptions(options: RuntimeConfig): OrtSession.SessionOptions {
@@ -132,12 +161,31 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             session?.close()
             session = null
             tokenizer = null
+            genAi?.unload()
+            genAi = null
         }
         _state.value = RuntimeState.Initialized
     }
 
     override suspend fun generate(
         handle: ModelHandle,
+        prompt: PromptProcessor.PromptParts,
+        options: GenerationOptions,
+    ): Flow<Token> {
+        // KV-cache multi-turn chat path: GenAI keeps a persistent Generator whose KV cache grows
+        // across turns. Raw-ORT embeddings + vision are unaffected (they use the non-GenAI path).
+        genAi?.let { llm ->
+            return llm.generate(prompt, template, options)
+        }
+        return generateNoKv(prompt, options)
+    }
+
+    /**
+     * Raw-ORT (no-KV) autoregressive generation for non-GenAI models: full-context loop that
+     * re-decodes the whole prompt every call. Also serves embeddings + vision models. Models that
+     * require a `past_key_values` sequence are rejected here — they should be loaded as GenAI.
+     */
+    private suspend fun generateNoKv(
         prompt: PromptProcessor.PromptParts,
         options: GenerationOptions,
     ): Flow<Token> = callbackFlow {
@@ -324,7 +372,30 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
 
     override suspend fun stop(handle: ModelHandle) {
         stopRequested = true
+        genAi?.stop()
     }
+
+    /**
+     * Start a fresh KV cache for a GenAI chat session (used by `resetChat()`). No-op for raw-ORT
+     * models, whose generation is already stateless.
+     */
+    override fun resetSession(handle: ModelHandle) {
+        genAi?.resetSession()
+    }
+
+    /**
+     * Chat template for the loaded model, read from metadata — mirrors
+     * `DefaultPromptProcessor.templateFor` so GenAI turn deltas match the SDK's prompt rendering.
+     */
+    private val template: PromptProcessor.Template
+        get() = when (currentModelMetadata?.get("template")?.lowercase()) {
+            "qwen" -> PromptProcessor.Template.QWEN
+            "llama", "llama3" -> PromptProcessor.Template.LLAMA
+            "raw" -> PromptProcessor.Template.RAW
+            else -> PromptProcessor.Template.CHATML
+        }
+
+    private var currentModelMetadata: Map<String, String>? = null
 
     companion object {
         private const val TAG = "EdgeDroid.OnnxRuntime"
