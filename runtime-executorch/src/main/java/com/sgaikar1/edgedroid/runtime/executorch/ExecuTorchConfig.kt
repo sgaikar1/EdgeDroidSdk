@@ -97,9 +97,9 @@ object ExecuTorchConfigTransformer {
         contextSize: Int,
     ): LlmGenerationConfig {
         val estimatedPromptTokens = promptChars / 4 + 8 // ~4 chars/token upper bound
-        val seqLen = (estimatedPromptTokens + options.maxTokens)
-            .coerceAtMost(contextSize)
-            .coerceAtLeast(options.maxTokens + 8)
+        // seqLen is the *total* sequence length (prompt + generated). Clamp it so it never
+        // exceeds the context window, even when the caller requests more new tokens than fit.
+        val seqLen = (estimatedPromptTokens + options.maxTokens).coerceIn(1, contextSize)
         val key = "$options|$seqLen"
         return generationCache.getOrPut(key) {
             LlmGenerationConfig.create()

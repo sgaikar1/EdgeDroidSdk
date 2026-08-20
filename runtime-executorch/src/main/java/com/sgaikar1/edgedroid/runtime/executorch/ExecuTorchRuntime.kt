@@ -12,14 +12,17 @@ import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimeState
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
-import org.pytorch.executorch.ExecuTorchRuntime
+// Alias to avoid clashing with this class's own name (ExecuTorchRuntime) in the same file.
+import org.pytorch.executorch.ExecuTorchRuntime as NativeRuntime
 import org.pytorch.executorch.extension.llm.LlmCallback
 import org.pytorch.executorch.extension.llm.LlmGenerationConfig
 import org.pytorch.executorch.extension.llm.LlmModule
@@ -52,7 +55,7 @@ internal class ExecuTorchRuntime(private val config: RuntimeConfig) : Runtime {
         if (initialized) return
         withContext(Dispatchers.Default) {
             // Loads libexecutorch.so via SoLoader (see ExecuTorchRuntime companion).
-            ExecuTorchRuntime.getRuntime()
+            NativeRuntime.getRuntime()
         }
         initialized = true
         _state.value = RuntimeState.Initialized
@@ -110,15 +113,25 @@ internal class ExecuTorchRuntime(private val config: RuntimeConfig) : Runtime {
         )
 
         var index = 0L
-        val failure = java.util.concurrent.atomic.AtomicReference<Throwable>()
+        // LlmModule.generate() is asynchronous: it submits the generation to an internal
+        // single-thread executor and returns immediately, firing callbacks later from native
+        // threads. So we keep the channel open and close it on the native completion signal
+        // (onStats/onError) rather than right after the submit call — otherwise every token
+        // would be dropped and errors swallowed.
+        val done = CompletableDeferred<Throwable?>()
         val callback = object : LlmCallback {
             override fun onResult(result: String) {
                 trySend(Token(index = index, id = tokenCounter.getAndIncrement(), text = result))
                 index++
             }
 
+            override fun onStats(stats: String) {
+                // The native runner emits stats once generation completes.
+                done.complete(null)
+            }
+
             override fun onError(errorCode: Int, message: String) {
-                failure.set(
+                done.complete(
                     RuntimeException(
                         "ExecuTorch generation failed (code $errorCode): $message",
                     ),
@@ -135,8 +148,13 @@ internal class ExecuTorchRuntime(private val config: RuntimeConfig) : Runtime {
             }
         }
 
-        failure.get()?.let { throw it }
-        close()
+        // Close the channel the moment the native completion signal arrives (from whichever
+        // thread completes `done`), and stop the native generator if the collector cancels.
+        done.invokeOnCompletion { close() }
+        awaitClose { module.stop() }
+
+        // Only reached once generation has finished; propagate any failure to the collector.
+        done.await().let { failure -> failure?.let { throw it } }
     }
 
     private fun generateWithImage(
@@ -154,13 +172,19 @@ internal class ExecuTorchRuntime(private val config: RuntimeConfig) : Runtime {
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
         bitmap.recycle()
+        // The multimodal runner expects an <image> marker in the prompt; insert it if absent.
+        val rendered = if (prompt.render().contains("<image>")) {
+            prompt.render()
+        } else {
+            prompt.prefix + "<image>\n" + prompt.body
+        }
         // ARGB_8888 pixels with 4 channels — the shape the multimodal runner's prefill expects.
         module.generate(
             image = pixels,
             width = width,
             height = height,
             channels = 4,
-            prompt = prompt.render(),
+            prompt = rendered,
             seqLen = generationConfig.seqLen,
             llmCallback = callback,
             echo = false,

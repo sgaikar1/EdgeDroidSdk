@@ -143,6 +143,17 @@ class ExecuTorchConfigTransformerTest {
     }
 
     @Test
+    fun `generationConfig never exceeds the context window`() {
+        // Even when the requested new-token budget exceeds the window, seqLen stays inside it.
+        val cfg = ExecuTorchConfigTransformer.generationConfig(
+            options = GenerationOptions(maxTokens = 256),
+            promptChars = 0,
+            contextSize = 128,
+        )
+        assertTrue("seqLen must never exceed contextSize", cfg.seqLen <= 128)
+    }
+
+    @Test
     fun `moduleConfig is cached per model and config`() {
         val a = ExecuTorchConfigTransformer.moduleConfig(model, baseConfig)
         val b = ExecuTorchConfigTransformer.moduleConfig(model, baseConfig)

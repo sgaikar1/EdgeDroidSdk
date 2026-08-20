@@ -76,9 +76,13 @@ object SdkFactory {
                 metadata["tokenizerPath"] = ensureOnnxTokenizer(context, model.id).absolutePath
             }
             SampleRuntime.EXECUTORCH -> {
-                // A PTE export ships with a paired tokenizer file; fetch it next to the model.
-                metadata["tokenizerUrl"]?.let { url ->
-                    metadata["tokenizerPath"] = ensureExecutorchTokenizer(context, model.id, url).absolutePath
+                // A PTE export ships with a paired tokenizer file. Use the model's declared
+                // tokenizerUrl when present, otherwise discover one in the same HF repo (this is
+                // the path HF-browser PTE picks take, since fromHf() has no tokenizer URL).
+                val tokenizerUrl = metadata["tokenizerUrl"]
+                    ?: discoverExecutorchTokenizerUrl(model.id)
+                if (tokenizerUrl != null) {
+                    metadata["tokenizerPath"] = ensureExecutorchTokenizer(context, model.id, tokenizerUrl).absolutePath
                 }
             }
             SampleRuntime.LLAMA -> Unit
@@ -130,4 +134,17 @@ object SdkFactory {
         }
         return file
     }
+
+    /**
+     * Best-effort discovery of the tokenizer that ships beside a `.pte` export in the same HF
+     * repo, for browser-picked PTE models that carry no explicit `tokenizerUrl`. Returns null
+     * (so the runtime reports a clear load error) when none can be found.
+     */
+    private fun discoverExecutorchTokenizerUrl(modelId: String): String? =
+        runCatching {
+            val names = HfHubClient.listFiles(modelId).map { it.name }
+            val tokenizer = names.firstOrNull { it.endsWith(".bin") }
+                ?: names.firstOrNull { it.contains("token") && it.endsWith(".json") }
+            tokenizer?.let { HfHubClient.resolveUrl(modelId, it) }
+        }.getOrNull()
 }
