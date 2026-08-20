@@ -46,8 +46,9 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
     private var visionWidth = 224
     private var visionHeight = 224
 
-    // Cumulative generation stats for this session. ONNX has no native timing hooks, so these
-    // are wall-clock measurements taken around the autoregressive loop.
+    // Cumulative generation stats for the current session (since load). ONNX has no native
+    // timing hooks, so these are wall-clock measurements taken around the autoregressive loop.
+    // Reset whenever a model is loaded/unloaded so stats() matches the documented semantics.
     private val stats = AtomicReference(GenerationStats())
 
     override fun stats(): GenerationStats = stats.get()
@@ -82,6 +83,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             detectVisionInput(s)
             1L
         }
+        stats.set(GenerationStats())
         _state.value = RuntimeState.ModelLoaded
         return handle
     }
@@ -143,6 +145,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             session = null
             tokenizer = null
         }
+        stats.set(GenerationStats())
         _state.value = RuntimeState.Initialized
     }
 

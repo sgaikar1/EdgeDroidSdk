@@ -31,18 +31,27 @@ internal object NativeLlama {
 
     external fun nativeTokenize(handle: Long, text: String): IntArray
 
-/**
- * Decodes [prefix] into the session's KV cache (positions 0..P-1) and caches it. No-op when
- * the prefix tokens are unchanged from the previous call. Returns true on success.
- */
-external fun nativeSetPrefix(handle: Long, prefix: String): Boolean
+    /**
+     * Decodes [prefix] into the session's KV cache (positions 0..P-1) and caches it. No-op when
+     * the prefix tokens are unchanged from the previous call. Returns true on success.
+     */
+    external fun nativeSetPrefix(handle: Long, prefix: String): Boolean
 
-/**
- * Generates a completion for [body] after the cached prefix. Returns the llama.cpp perf
- * counters for this call as `[t_p_eval_ms, t_eval_ms, n_p_eval, n_eval]` (prompt time,
- * decode time, prompt tokens, generated tokens), or `null` when timings are unavailable.
- */
-external fun nativeGenerate(
+    /**
+     * Snapshot of the llama.cpp cumulative perf counters for the session:
+     * `[t_p_eval_ms, t_eval_ms, n_p_eval, n_eval]` (prompt ms, decode ms, prompt tokens,
+     * generated tokens), or `null` when unavailable. The context must be created with
+     * `no_perf = false` for the timing values to be non-zero.
+     */
+    external fun nativePerf(handle: Long): DoubleArray?
+
+    /**
+     * Generates a completion for [body] after the cached prefix. Returns the llama.cpp cumulative
+     * perf counters at completion (`[t_p_eval_ms, t_eval_ms, n_p_eval, n_eval]`). Diff against a
+     * [nativePerf] snapshot taken before the call (including the prefix decode) for per-call
+     * numbers; returns `null` when timings are unavailable.
+     */
+    external fun nativeGenerate(
         handle: Long,
         body: String,
         temperature: Float,
@@ -64,7 +73,7 @@ external fun nativeGenerate(
 
     /**
      * Image->text generation; the prompt text must contain the `<image>` marker. Returns the
-     * same llama.cpp perf array as [nativeGenerate].
+     * same cumulative llama.cpp perf array as [nativeGenerate].
      */
     external fun nativeGenerateVision(
         handle: Long,

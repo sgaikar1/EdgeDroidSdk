@@ -30,4 +30,12 @@ data class GenerationStats(
         promptMs = promptMs + other.promptMs,
         evalMs = evalMs + other.evalMs,
     )
+
+    /** Per-generation delta between two snapshots (e.g. `after - before`). Never negative. */
+    operator fun minus(other: GenerationStats): GenerationStats = GenerationStats(
+        promptTokens = (promptTokens - other.promptTokens).coerceAtLeast(0L),
+        evalTokens = (evalTokens - other.evalTokens).coerceAtLeast(0L),
+        promptMs = (promptMs - other.promptMs).coerceAtLeast(0L),
+        evalMs = (evalMs - other.evalMs).coerceAtLeast(0L),
+    )
 }

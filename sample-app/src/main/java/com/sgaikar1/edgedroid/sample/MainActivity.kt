@@ -364,6 +364,14 @@ fun MessageBubble(message: ChatMessage) {
                     color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                message.metrics?.let { m ->
+                    Text(
+                        text = m,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
         }
     }

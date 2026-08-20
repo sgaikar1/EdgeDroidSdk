@@ -154,22 +154,27 @@ static bool decode_tokens_at(LlamaSession* s, const std::vector<llama_token>& to
     return true;
 }
 
-// Captures llama.cpp context perf counters for this call. The context keeps cumulative
-// counters across calls, so we diff a before/after snapshot to report per-call numbers.
-// Out layout mirrors NativeLlama.kt: [t_p_eval_ms, t_eval_ms, n_p_eval, n_eval].
-static void perf_diff(const llama_perf_context_data& before,
-                      const llama_perf_context_data& after,
-                      double out[4]) {
-    out[0] = after.t_p_eval_ms - before.t_p_eval_ms;
-    out[1] = after.t_eval_ms - before.t_eval_ms;
-    out[2] = after.n_p_eval - before.n_p_eval;
-    out[3] = after.n_eval - before.n_eval;
+// Reads llama.cpp context perf counters and packs them in the layout used by
+// NativeLlama.kt: [t_p_eval_ms, t_eval_ms, n_p_eval, n_eval]. These are cumulative
+// session counters; callers that want a per-call value snapshot before and after.
+static jdoubleArray perf_to_jdoublearray(JNIEnv* env, const llama_perf_context_data& perf) {
+    const double vals[4] = {
+        perf.t_p_eval_ms,
+        perf.t_eval_ms,
+        (double) perf.n_p_eval,
+        (double) perf.n_eval,
+    };
+    jdoubleArray result = env->NewDoubleArray(4);
+    if (result) env->SetDoubleArrayRegion(result, 0, 4, vals);
+    return result;
 }
 
-static jdoubleArray perf_to_jdoublearray(JNIEnv* env, const double perf[4]) {
-    jdoubleArray result = env->NewDoubleArray(4);
-    if (result) env->SetDoubleArrayRegion(result, 0, 4, perf);
-    return result;
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativePerf(
+        JNIEnv* env, jobject, jlong handle) {
+    LlamaSession* s = lookup_session(handle);
+    if (!s || !s->ctx) return nullptr;
+    return perf_to_jdoublearray(env, llama_perf_context(s->ctx));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -225,6 +230,9 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeLoadModel(
     cparams.n_batch = (uint32_t) nBatch;
     cparams.n_threads = nThreads;
     cparams.n_threads_batch = nThreadsBatch;
+    // Measure decode/eval timings so the streaming metrics (tok/s, TTFT) have real numbers.
+    // The vendored llama.cpp default for no_perf is true, which would zero out llama_perf_*.
+    cparams.no_perf = false;
 
     g_last_error.clear();
     llama_context* ctx = llama_init_from_model(model, cparams);
@@ -333,8 +341,6 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
     const llama_vocab* vocab = llama_model_get_vocab(s->model);
     if (!vocab) return nullptr;
 
-    const llama_perf_context_data perf0 = llama_perf_context(s->ctx);
-
     // The prefix (system prompt) KV lives at positions [0, P). Trim everything >= P so a
     // shorter previous body doesn't leave stale KV behind, then decode the body at P.
     const llama_pos prefix_len = s->prefix_valid ? (llama_pos) s->cached_prefix.size() : 0;
@@ -421,10 +427,9 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerate(
 
     llama_sampler_free(smpl);
 
-    const llama_perf_context_data perf1 = llama_perf_context(s->ctx);
-    double diff[4];
-    perf_diff(perf0, perf1, diff);
-    return perf_to_jdoublearray(env, diff);
+    // Absolute cumulative counters at completion; the caller diffs against a snapshot taken
+    // before the call (which also covers the cached-prefix decode in nativeSetPrefix).
+    return perf_to_jdoublearray(env, llama_perf_context(s->ctx));
 }
 
 // Load the mmproj vision encoder (image->embeddings) for a vision-capable model.
@@ -481,8 +486,6 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
 
     const llama_vocab* vocab = llama_model_get_vocab(s->model);
     if (!vocab) return nullptr;
-
-    const llama_perf_context_data perf0 = llama_perf_context(s->ctx);
 
     const char* prompt = env->GetStringUTFChars(jPrompt, nullptr);
     std::string text(prompt ? prompt : "");
@@ -570,10 +573,8 @@ Java_com_sgaikar1_edgedroid_runtime_llama_NativeLlama_nativeGenerateVision(
     }
     llama_sampler_free(smpl);
 
-    const llama_perf_context_data perf1 = llama_perf_context(s->ctx);
-    double diff[4];
-    perf_diff(perf0, perf1, diff);
-    return perf_to_jdoublearray(env, diff);
+    // Absolute cumulative counters at completion (vision path has no prefix cache to diff).
+    return perf_to_jdoublearray(env, llama_perf_context(s->ctx));
 }
 
 extern "C" JNIEXPORT void JNICALL

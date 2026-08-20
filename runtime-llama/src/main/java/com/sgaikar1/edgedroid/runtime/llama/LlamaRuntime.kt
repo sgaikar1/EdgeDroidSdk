@@ -34,8 +34,9 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
     private var gpuDeviceCount = 0
     private val tokenCounter = AtomicLong(0)
 
-    // Cumulative generation stats for this session (since load). Updated as a side effect of
-    // generate() from llama.cpp's own llama_perf_* counters.
+    // Cumulative generation stats for the current session (since load). Updated as a side
+    // effect of generate() from llama.cpp's own llama_perf_* counters and reset whenever a
+    // model is loaded/unloaded so the documented "since the model was loaded" semantics hold.
     private val stats = AtomicReference(GenerationStats())
 
     override fun stats(): GenerationStats = stats.get()
@@ -72,6 +73,7 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
             handle = loadInternal(path, options, 0)
         }
         if (handle == 0L) throw RuntimeException("Failed to load model at $path")
+        stats.set(GenerationStats())
         _state.value = RuntimeState.ModelLoaded
         val mmproj = model.metadata["mmprojPath"]
         if (!mmproj.isNullOrBlank()) {
@@ -99,6 +101,7 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
 
     override suspend fun unload(handle: ModelHandle) {
         if (handle != 0L) withContext(Dispatchers.Default) { NativeLlama.nativeUnload(handle) }
+        stats.set(GenerationStats())
         _state.value = RuntimeState.Initialized
     }
 
@@ -120,11 +123,14 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
             )
             index++
         }
-        // Native perf for this call: [t_p_eval_ms, t_eval_ms, n_p_eval, n_eval] from
-        // llama_perf_context, diffed inside the JNI layer so each call is self-contained.
+        // Native perf delta for this call. llama.cpp keeps cumulative session counters, so we
+        // snapshot before the whole generation sequence (which includes the cached-prefix
+        // decode in nativeSetPrefix) and after, then diff. Layout: [t_p_eval_ms, t_eval_ms,
+        // n_p_eval, n_eval].
         val perf = withContext(Dispatchers.Default) {
+            val before = NativeLlama.nativePerf(handle) ?: DoubleArray(4)
             val image = prompt.attachments.firstOrNull()
-            if (image != null) {
+            val after = if (image != null) {
                 // Vision path: the text must contain the <image> marker; insert it if absent.
                 val rendered = if (prompt.render().contains("<image>")) {
                     prompt.render()
@@ -162,8 +168,9 @@ internal class LlamaRuntime(private val config: RuntimeConfig) : Runtime {
                     callback = callback,
                 )
             }
+            if (after != null && after.size >= 4) DoubleArray(4) { after[it] - before[it] } else null
         }
-        if (perf != null && perf.size >= 4) {
+        if (perf != null) {
             stats.updateAndGet { previous ->
                 previous + GenerationStats(
                     promptTokens = perf[2].toLong(),

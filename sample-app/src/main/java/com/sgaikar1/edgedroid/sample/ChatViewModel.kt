@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.Token
 import com.sgaikar1.edgedroid.common.TokenMetrics
 import com.sgaikar1.edgedroid.core.LlmEngineState
@@ -20,6 +21,7 @@ data class ChatMessage(
     val role: String,
     val text: String,
     val reasoning: String? = null,
+    val metrics: String? = null,
 )
 
 class ChatViewModel(
@@ -116,6 +118,7 @@ class ChatViewModel(
         generationJob = viewModelScope.launch {
             val image = _attachedImage.value
             try {
+                val statsBefore = sdk.stats()
                 sdk.stream(
                     text,
                     images = if (image != null) {
@@ -149,12 +152,13 @@ class ChatViewModel(
                                 " · TTFT ${m.timeToFirstTokenMs} ms"
                     }
                 }
-                // Final per-session aggregate from the runtime (llama.cpp llama_perf_*).
-                val s = sdk.stats()
+                // Per-reply aggregate: delta of the session counters across this call, so the
+                // line describes this reply (not the whole session), plus this reply's TTFT.
+                val reply = sdk.stats() - statsBefore
                 val ttft = lastMetrics?.timeToFirstTokenMs
-                _streamingMetrics.value = buildString {
-                    append("${"%.1f".format(s.tokensPerSecond)} tok/s · ")
-                    append("${s.evalTokens} eval tok · ${s.totalMs} ms")
+                val metricsLine = buildString {
+                    append("${"%.1f".format(reply.tokensPerSecond)} tok/s · ")
+                    append("${reply.evalTokens} eval tok · ${reply.totalMs} ms")
                     if (ttft != null) append(" · TTFT $ttft ms")
                 }
                 _messages.update {
@@ -162,6 +166,7 @@ class ChatViewModel(
                         "assistant",
                         answer.toString(),
                         reasoning.toString().ifEmpty { null },
+                        metrics = metricsLine,
                     )
                 }
                 Log.d("EdgeDroid.Sample", "Answer (${answer.length}): ${answer}")
