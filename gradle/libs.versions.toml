@@ -3,6 +3,7 @@ agp = "8.13.0"
 kotlin = "2.1.21"
 coreKtx = "1.13.1"
 junit = "4.13.2"
+mockito = "5.12.0"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 lifecycleRuntimeKtx = "2.8.7"
@@ -12,6 +13,7 @@ coroutines = "1.9.0"
 okhttp = "4.12.0"
 kotlinxSerialization = "1.7.3"
 onnxruntime = "1.28.0"
+geniex = "0.4.0"
 serializationPlugin = "2.1.21"
 vanniktech = "0.31.0"
 dokka = "2.0.0"
@@ -22,6 +24,7 @@ sdkVersion = "0.9.0"
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+mockito-core = { group = "org.mockito", name = "mockito-core", version.ref = "mockito" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
@@ -41,6 +44,7 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
+geniex-android = { group = "com.qualcomm.qti", name = "geniex-android", version.ref = "geniex" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

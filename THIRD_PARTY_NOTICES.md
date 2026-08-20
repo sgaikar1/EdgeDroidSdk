@@ -3,6 +3,14 @@
 This project bundles and depends on third-party open-source software. Attribution and
 licenses are recorded below.
 
+## Qualcomm GenieX Android SDK (runtime dependency, not bundled)
+
+- **Artifact:** `com.qualcomm.qti:geniex-android` (Maven Central) — pulled in transitively by
+  the `runtime-qnn` module when apps add that dependency.
+- **Source:** https://github.com/qualcomm/GenieX
+- **License:** BSD 3-Clause License + Qualcomm Terms of Use
+  (https://www.qualcomm.com/site/terms-of-use; full texts ship with the artifact).
+
 ## Hugging Face tokenizer — all-MiniLM-L6-v2
 
 - **Source:** https://huggingface.co/Xenova/all-MiniLM-L6-v2 (base model:
