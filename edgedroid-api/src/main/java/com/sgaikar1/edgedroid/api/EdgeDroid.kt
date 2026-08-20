@@ -6,6 +6,9 @@ import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.SdkResult
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TranscriptionOptions
+import com.sgaikar1.edgedroid.common.TranscriptionResult
+import com.sgaikar1.edgedroid.common.TranscriptionSegment
 import com.sgaikar1.edgedroid.core.LlmEngine
 import com.sgaikar1.edgedroid.core.LlmEngineState
 import com.sgaikar1.edgedroid.core.MemoryConfig
@@ -117,6 +120,28 @@ class EdgeDroid private constructor(
      * runtimes throw [UnsupportedOperationException].
      */
     suspend fun embeddings(text: String): FloatArray = engine.embeddings(text)
+
+    /**
+     * Transcribe [pcm] (16-bit little-endian PCM at [sampleRate] Hz) into timestamped
+     * segments + full text using the loaded model. Requires the selected runtime to support
+     * [Capability.AUDIO] (e.g. the whisper.cpp runtime with a GGML whisper model); other
+     * runtimes throw [UnsupportedOperationException].
+     */
+    suspend fun transcribe(
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions = TranscriptionOptions.DEFAULT,
+    ): TranscriptionResult = engine.transcribe(pcm, sampleRate, options)
+
+    /**
+     * Same as [transcribe], but emits each segment as it is finalized (partial/streaming
+     * results where the backend supports them).
+     */
+    fun transcribeStream(
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions = TranscriptionOptions.DEFAULT,
+    ): Flow<TranscriptionSegment> = engine.transcribeStream(pcm, sampleRate, options)
 
     /**
      * Interrupt an in-flight generation.
