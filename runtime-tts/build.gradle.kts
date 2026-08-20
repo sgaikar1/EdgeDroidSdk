@@ -1,0 +1,76 @@
+import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+
+plugins {
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.maven.publish)
+}
+
+android {
+    namespace = "com.sgaikar1.edgedroid.runtime.tts"
+    compileSdk = 35
+
+    defaultConfig {
+        minSdk = 26
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    packaging {
+        jniLibs {
+            // ORT's AAR bundles libonnxruntime.so for multiple ABIs; keep them all.
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    api(project(":edgedroid-core"))
+    implementation(project(":edgedroid-common"))
+    // Depends on the ONNX runtime module (rather than editing its internals) to reuse the
+    // onnxruntime-android wiring and ABI list; issue #14 is evolving runtime-onnx in parallel.
+    implementation(project(":runtime-onnx"))
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.onnxruntime.android)
+    testImplementation(libs.junit)
+}
+
+mavenPublishing {
+    configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = false))
+    signAllPublications()
+    publishToMavenCentral(host = com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    coordinates("io.github.sgaikar1", project.name, libs.versions.sdkVersion.get())
+    pom {
+        name.set("EdgeDroid ${project.name}")
+        description.set("EdgeDroid: on-device LLM SDK for Android - ${project.name} module (Kokoro-82M text-to-speech)")
+        url.set("https://github.com/sgaikar1/EdgeDroidSdk")
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+                distribution.set("repo")
+            }
+        }
+        developers {
+            developer {
+                id.set("sgaikar1")
+                name.set("Santosh Gaikar")
+                email.set("santoshgaikar1@gmail.com")
+            }
+        }
+        scm {
+            url.set("https://github.com/sgaikar1/EdgeDroidSdk")
+            connection.set("scm:git:https://github.com/sgaikar1/EdgeDroidSdk.git")
+            developerConnection.set("scm:git:ssh://github.com/sgaikar1/EdgeDroidSdk.git")
+        }
+        issueManagement {
+            url.set("https://github.com/sgaikar1/EdgeDroidSdk/issues")
+        }
+    }
+}
+
+apply(from = rootProject.file("gradle/javadoc-jar.gradle.kts"))

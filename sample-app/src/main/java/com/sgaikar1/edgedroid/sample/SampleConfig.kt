@@ -85,6 +85,20 @@ object SampleModels {
         chatCapable = !sel.format.isOnnx,
         embeddingCapable = sel.format.isOnnx,
     )
+
+    /** Kokoro-82M TTS model used for the text->speech "Speak" action. */
+    val KOKORO_TTS: SampleModel = SampleModel(
+        id = "kokoro-82m-tts",
+        label = "Kokoro-82M TTS (q8f16)",
+        runtime = SampleRuntime.ONNX,
+        format = ModelFormat.ONNX,
+        url = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q8f16.onnx",
+        sizeBytes = 86_033_585L,
+        metadata = mapOf("template" to "raw"),
+        chatCapable = false,
+        embeddingCapable = false,
+        visionCapable = false,
+    )
 }
 
 data class SampleConfig(

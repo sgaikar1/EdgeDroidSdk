@@ -3,6 +3,8 @@ package com.sgaikar1.edgedroid.api.internal
 import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TtsAudio
+import com.sgaikar1.edgedroid.common.TtsSpeech
 import com.sgaikar1.edgedroid.core.ChatSession
 import com.sgaikar1.edgedroid.core.LlmEngine
 import com.sgaikar1.edgedroid.core.LlmEngineState
@@ -12,6 +14,7 @@ import com.sgaikar1.edgedroid.core.ModelProvider
 import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.Runtime
 import com.sgaikar1.edgedroid.core.RuntimeConfig
+import com.sgaikar1.edgedroid.core.RuntimePlugin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +29,8 @@ internal class SdkEngine(
     private val log: LogProvider,
     private val compatibilityGate: (Model) -> String? = { null },
     private val processor: PromptProcessor = DefaultPromptProcessor(),
+    private val ttsPlugin: RuntimePlugin? = null,
+    private val ttsModel: Model? = null,
 ) : LlmEngine {
 
     private val _state = MutableStateFlow<LlmEngineState>(LlmEngineState.Idle)
@@ -35,6 +40,9 @@ internal class SdkEngine(
     private var runtime: Runtime? = null
     private var handle: ModelHandle = 0L
     private var localPath: String? = null
+
+    private var ttsRuntime: Runtime? = null
+    private var ttsHandle: ModelHandle = 0L
 
     private val session: ChatSession = DefaultChatSession()
 
@@ -97,8 +105,16 @@ internal class SdkEngine(
         } finally {
             handle = 0L
             runtime = null
+            unloadTts()
             _state.value = LlmEngineState.Idle
         }
+    }
+
+    private suspend fun unloadTts() {
+        val r = ttsRuntime ?: return
+        runCatching { if (ttsHandle != 0L) r.unload(ttsHandle) }
+        ttsHandle = 0L
+        ttsRuntime = null
     }
 
     override suspend fun generate(
@@ -135,6 +151,37 @@ internal class SdkEngine(
         ensureReady()
         val r = runtime ?: throw IllegalStateException("Runtime not ready")
         return r.embeddings(handle, text)
+    }
+
+    /** Whether an AUDIO (TTS) runtime was configured via `.tts(...)`. */
+    val ttsAvailable: Boolean
+        get() = ttsPlugin != null && ttsModel != null
+
+    /**
+     * Synthesize [text] using the configured TTS runtime (Capability.AUDIO). Lazily loads the
+     * TTS model on first call. Throws [UnsupportedOperationException] if no TTS runtime/model
+     * was configured.
+     */
+    suspend fun synthesize(text: String, voice: String, speed: Float): TtsAudio {
+        val speech = ensureTtsReady() ?: throw UnsupportedOperationException(
+            "No AUDIO runtime configured — register one with EdgeDroid.Builder.tts(plugin, model)",
+        )
+        return speech.synthesize(text, voice, speed)
+    }
+
+    private suspend fun ensureTtsReady(): TtsSpeech? {
+        val plugin = ttsPlugin ?: return null
+        val model = ttsModel ?: return null
+        if (ttsRuntime != null) return ttsRuntime as? TtsSpeech
+        val path = provider.getLocalPath(model)
+        val runtime = plugin.create(config)
+        runtime.initialize()
+        ttsHandle = runtime.loadModel(
+            model.copy(metadata = model.metadata + mapOf("localPath" to path)),
+            config,
+        )
+        ttsRuntime = runtime
+        return runtime as? TtsSpeech
     }
 
     override suspend fun stop() {

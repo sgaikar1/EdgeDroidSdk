@@ -99,6 +99,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val error by viewModel.error.collectAsStateWithLifecycle()
     val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
     val embeddingResult by viewModel.embeddingResult.collectAsStateWithLifecycle()
+    val ttsStatus by viewModel.ttsStatus.collectAsStateWithLifecycle()
     val downloadError by viewModel.downloadError.collectAsStateWithLifecycle()
     val downloadedIds by viewModel.downloadedIds.collectAsStateWithLifecycle()
     val attachedImage by viewModel.attachedImage.collectAsStateWithLifecycle()
@@ -191,11 +192,20 @@ fun ChatScreen(viewModel: ChatViewModel) {
             if (config.model.embeddingCapable) {
                 TextButton(onClick = { viewModel.runEmbeddings() }) { Text("Embed") }
             }
+            TextButton(onClick = { viewModel.speak(input); input = "" }) { Text("Speak") }
             TextButton(onClick = { viewModel.stop() }) { Text("Stop") }
             TextButton(onClick = { viewModel.clear() }) { Text("Clear") }
         }
 
         embeddingResult?.let { Text(text = it, style = MaterialTheme.typography.bodySmall) }
+        ttsStatus?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+        }
         downloadError?.let { err ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),

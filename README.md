@@ -31,6 +31,7 @@ Your Android App
 - **llama.cpp** — GGUF chat models with **Vulkan GPU** (auto fallback to CPU)
 - **Image → text** 🖼️ — attach a photo, ask "what's in this picture?" (SmolVLM / LLaVA-style)
 - **ONNX Runtime** — embeddings, no-KV LLM generation, `pixel_values` vision
+- **Text-to-speech** 🔊 — Kokoro-82M via ONNX (`Capability.AUDIO`), 24 kHz output, WAV export
 - **Reliable downloads** — foreground service keeps big model downloads alive in the
   background (progress notification + pause/resume + sha256 verification)
 - **Private/gated models** — auth headers for Hugging Face gated repos, Git LFS, corporate storage
@@ -39,7 +40,7 @@ Your Android App
   pre-filter the HF browser to models that actually fit this device
 - **Device-aware defaults** — threads, context size and GPU policy derived from the hardware,
   with a one-tap "reset to device defaults" in the sample
-- **Capability system** — streaming, vision, embeddings, tool-calling, JSON, grammar
+- **Capability system** — streaming, vision, embeddings, audio (TTS), tool-calling, JSON, grammar
 - **Sample app** with a **Hugging Face model browser**, runtime picker, and chat UI
 
 ## 📦 Installation
@@ -171,6 +172,45 @@ sdk.load()
 val v: FloatArray = sdk.embeddings("A cat sits on a mat.")   // 384-dim vector
 ```
 
+## 🔊 Text-to-speech (Kokoro-82M)
+
+`runtime-tts` is a speech-synthesis runtime built on **Kokoro-82M**, an 82M-parameter ONNX TTS
+model. It runs on the same `onnxruntime-android` wiring as `runtime-onnx` and registers the
+reserved `Capability.AUDIO` — no core changes. Output is raw mono audio at the model's native
+**24 kHz** sample rate.
+
+```kotlin
+val sdk = EdgeDroid.Builder(context)
+    .runtime(Runtime.plugin(OnnxPlugin()))
+    .model(Model.remote(/* your chat/embedding model */))
+    .tts(KokoroTtsPlugin(), Model.remote(
+        id = "kokoro",
+        url = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q8f16.onnx",
+        format = ModelFormat.ONNX,
+        metadata = mapOf("voicePath" to "/path/to/voices/af_heart.bin"),
+    ))
+    .build()
+
+sdk.speak("Hello from EdgeDroid")              // synthesizes + plays via a float AudioTrack
+val wav: ByteArray = sdk.synthesizeWav("Hi!")  // complete 16-bit PCM WAV file
+val audio = sdk.synthesize("Hi!", voice = "am_michael", speed = 1.1f) // raw samples
+```
+
+- The TTS model is a separate `Model` downloaded on demand the first time `speak()` is called.
+- **Voices**: point `metadata["voicesDir"]` at a folder of `voices/<id>.bin` files (the
+  `onnx-community/Kokoro-82M-v1.0-ONNX` `voices/` dir), or `metadata["voicePath"]` at a single
+  `.bin`. The sample bundles `af_heart` as the default. Known voices include `af_heart`,
+  `af_bella`, `am_adam`, `am_michael`, `bf_emma`, `bm_george`, `ef_dora`, `em_alex`,
+  `jf_alpha`, `jm_kumo`, `zf_xiaoxiao`, …
+- **Sample rates**: Kokoro is natively **24 kHz**. `TtsAudio.sampleRate` reports the model rate;
+  play it back with a float `AudioTrack` at that rate (the SDK's `speak()` does this), or use
+  `TtsAudio.toWav()` for a standard file. No implicit resampling is performed.
+- **Phonemization**: Kokoro is phoneme-based. `runtime-tts` ships a compact, dependency-free
+  English G2P (lexicon + letter-to-sound rules) so raw text works out of the box. It is a
+  lighter port of `misaki` (which uses spaCy POS tagging, a large CMU lexicon and a neural
+  fallback) — quality is basic and a full `misaki` port is future work.
+- Gate the UI on `sdk.ttsAvailable` to know whether a TTS runtime was configured.
+
 ## ⬇️ Downloads — even when the app is backgrounded
 
 Model downloads run in an SDK-provided **foreground service** (`dataSync`) with a progress
@@ -245,6 +285,7 @@ if (modelSize + 256MB > caps.freeStorageBytes) { /* won't fit — don't download
 | --- | --- | --- | --- |
 | `runtime-llama` | GGUF | STREAMING, VISION | CPU + Vulkan GPU auto-fallback, mmproj image→text |
 | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM |
+| `runtime-tts` | ONNX | AUDIO | Kokoro-82M text-to-speech at 24 kHz |
 
 **Add your own** — implement the SPI, register it, done:
 
@@ -277,8 +318,9 @@ if a driver fails.
   threads/context/GPU, and a **Reset to device defaults** button
 - **Chat** with live token streaming, a **Reasoning** area for thinking models, and a
   **Thinking…** indicator
-- **Image attach** for vision models, **Embeddings** for ONNX, **Download / Load / Unload**,
-  compatibility check, creativity (temperature/top-p/top-k) and system prompt
+- **Image attach** for vision models, **Embeddings** for ONNX, **Speak** (Kokoro text-to-speech)
+  for any model, **Download / Load / Unload**, compatibility check, creativity
+  (temperature/top-p/top-k) and system prompt
 
 ## 🔧 Building from source
 
