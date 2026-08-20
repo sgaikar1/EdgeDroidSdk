@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.microsoft.onnxruntime</groupId>
+  <artifactId>onnxruntime-genai-android</artifactId>
+  <version>0.15.2</version>
+  <packaging>aar</packaging>
+  <name>ONNX Runtime GenAI (Android)</name>
+  <description>ONNX Runtime GenAI Java/Android bindings for generative AI on device.</description>
+  <url>https://github.com/microsoft/onnxruntime-genai</url>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>microsoft</id>
+      <name>Microsoft</name>
+      <url>https://github.com/microsoft/onnxruntime-genai</url>
+    </developer>
+  </developers>
+  <scm>
+    <url>https://github.com/microsoft/onnxruntime-genai</url>
+    <connection>scm:git:https://github.com/microsoft/onnxruntime-genai.git</connection>
+  </scm>
+</project>

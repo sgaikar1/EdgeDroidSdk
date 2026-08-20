@@ -58,6 +58,11 @@ internal class SdkEngine(
 
     fun resetSession() {
         session.reset()
+        // KV-cache runtimes hold per-session state (e.g. a GenAI Generator); reset it so the next
+        // turn starts from an empty context rather than stale conversation history.
+        if (runtime != null && handle != 0L) {
+            runCatching { runtime!!.resetSession(handle) }
+        }
     }
 
     val template: PromptProcessor.Template
