@@ -18,9 +18,9 @@ Your Android App
        │
  Runtime Registry + AUTO
        ▼
-┌────────┬─────────┬─────────┐
-│ llama  │ ONNX    │ future  │   ← every runtime is a RuntimePlugin
-└────────┴─────────┴─────────┘
+┌────────┬─────────┬────────────┐
+│ llama  │ ONNX    │ ExecuTorch │  ← every runtime is a RuntimePlugin
+└────────┴─────────┴────────────┘
 ```
 
 > The SDK owns **everything except inference**. You never touch JNI, GGUF, model paths, or
@@ -31,6 +31,8 @@ Your Android App
 - **llama.cpp** — GGUF chat models with **Vulkan GPU** (auto fallback to CPU)
 - **Image → text** 🖼️ — attach a photo, ask "what's in this picture?" (SmolVLM / LLaVA-style)
 - **ONNX Runtime** — embeddings, no-KV LLM generation, `pixel_values` vision
+- **ExecuTorch** — `.pte` modules (PyTorch's mobile runtime) with streaming token generation;
+  XNNPACK/CPU out of the box, per-ABI packaging
 - **Reliable downloads** — foreground service keeps big model downloads alive in the
   background (progress notification + pause/resume + sha256 verification)
 - **Private/gated models** — auth headers for Hugging Face gated repos, Git LFS, corporate storage
@@ -58,7 +60,8 @@ dependencyResolutionManagement {
 dependencies {
     implementation("io.github.sgaikar1:edgedroid-api:0.9.0")
     implementation("io.github.sgaikar1:runtime-llama:0.9.0")   // llama.cpp
-    // or implementation("io.github.sgaikar1:runtime-onnx:0.9.0") // ONNX Runtime
+    // or implementation("io.github.sgaikar1:runtime-onnx:0.9.0")       // ONNX Runtime
+    // or implementation("io.github.sgaikar1:runtime-executorch:0.9.0") // ExecuTorch (PTE)
 }
 ```
 
@@ -75,6 +78,7 @@ ships the **one ABI** for the device, so the real on-device cost is about half t
 | `edgedroid-common` / `core` / `api` / `storage` / `download` | ~0.2 MB total | pure Kotlin |
 | `runtime-llama` | ~39 MB | llama.cpp + Vulkan + vision (mmproj); ~30 MB per-ABI in an APK |
 | `runtime-onnx` | ~0.1 MB | ONNX Runtime `.so`s come from the onnxruntime-android dependency |
+| `runtime-executorch` | ~0.1 MB | `libexecutorch.so` comes from the org.pytorch executorch-android AAR (~7 MB, 2 ABIs) |
 
 A chat-only app adding `edgedroid-api` + `runtime-llama` adds roughly **~30 MB** to the APK.
 
@@ -245,17 +249,18 @@ if (modelSize + 256MB > caps.freeStorageBytes) { /* won't fit — don't download
 | --- | --- | --- | --- |
 | `runtime-llama` | GGUF | STREAMING, VISION | CPU + Vulkan GPU auto-fallback, mmproj image→text |
 | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM |
+| `runtime-executorch` | PTE | STREAMING, VISION | ExecuTorch `LlmModule` (`.pte` + paired tokenizer); mmap load, per-ABI AAR |
 
 **Add your own** — implement the SPI, register it, done:
 
 ```kotlin
-class ExecPlugin : RuntimePlugin {
-    override val id = "executorch"
-    override val supportedFormats = setOf(ModelFormat.PTE)
+class LiteRtPlugin : RuntimePlugin {
+    override val id = "litert"
+    override val supportedFormats = setOf(ModelFormat.TFLITE)
     override val capabilities = setOf(Capability.STREAMING)
-    override suspend fun create(config: RuntimeConfig): Runtime = ExecRuntime(config)
+    override suspend fun create(config: RuntimeConfig): Runtime = LiteRtRuntime(config)
 }
-sdk.registerRuntime(ExecPlugin())   // AUTO now routes PTE models to it
+sdk.registerRuntime(LiteRtPlugin())   // AUTO now routes TFLITE models to it
 ```
 
 No `if (runtime == ...)` anywhere — the SDK dispatches purely on plugin metadata.
@@ -270,9 +275,9 @@ if a driver fails.
 
 `sample-app/` is a Jetpack Compose demo that shows everything:
 
-- **Runtime + model picker** (Settings screen) — llama.cpp / ONNX, with a **Hugging Face
-  model browser** that filters to device-supported GGUF/ONNX models (size cap auto-set from
-  free storage, fit badges, "Show all" toggle)
+- **Runtime + model picker** (Settings screen) — llama.cpp / ONNX / ExecuTorch, with a
+  **Hugging Face model browser** that filters to device-supported GGUF/ONNX/PTE models (size cap
+  auto-set from free storage, fit badges, "Show all" toggle)
 - **Device-aware defaults** — Settings shows a device summary, "Recommended: …" hints next to
   threads/context/GPU, and a **Reset to device defaults** button
 - **Chat** with live token streaming, a **Reasoning** area for thinking models, and a
@@ -309,7 +314,7 @@ we want to grow — all great places to contribute:
 
 | Area | Details |
 | --- | --- |
-| **More runtimes** | ExecuTorch (PTE), LiteRT/TFLite, MNN — each is a new `RuntimePlugin` module, no core changes |
+| **More runtimes** | LiteRT/TFLite, MNN, Core ML — each is a new `RuntimePlugin` module, no core changes |
 | **ONNX LLM + KV cache** | raw-ORT generation is no-KV today; full KV-cache chat needs ONNX Runtime GenAI |
 | **Tool calling / function calling** | reserved `Capability.TOOL_CALLING`; runtime-agnostic tool loop + JSON parsing |
 | **Structured output / grammar** | `Capability.JSON_MODE` / `GRAMMAR` — llama.cpp grammar support is available but not wired |

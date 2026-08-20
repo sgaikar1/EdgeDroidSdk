@@ -81,7 +81,15 @@ fun HfBrowserScreen(initialFilter: String, onPicked: (HfModelSelection) -> Unit)
     val store = (context.applicationContext as EdgeDroidApp).sampleStore
     val caps = store.capabilities
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(if (initialFilter == "ONNX") "onnx" else "gguf") }
+    var filter by remember {
+        mutableStateOf(
+            when (initialFilter) {
+                "ONNX" -> "onnx"
+                "EXECUTORCH" -> "pte"
+                else -> "gguf"
+            },
+        )
+    }
     // Default the size cap to what the device's free storage can actually hold.
     var maxGb by remember { mutableStateOf(recommendedMaxGb(caps)) }
     val maxBytes = if (maxGb <= 0) 0L else maxGb * 1024L * 1024L * 1024L
@@ -100,7 +108,7 @@ fun HfBrowserScreen(initialFilter: String, onPicked: (HfModelSelection) -> Unit)
             searching = true
             error = null
             results = try {
-                val fmt = if (filter == "onnx") ModelFormat.ONNX else ModelFormat.GGUF
+                val fmt = filterFormat(filter)
                 withContext(Dispatchers.IO) {
                     HfHubClient.searchModels(query, filter, maxBytes, paramsRange.min, paramsRange.max)
                 }.map { summary ->
@@ -160,6 +168,7 @@ fun HfBrowserScreen(initialFilter: String, onPicked: (HfModelSelection) -> Unit)
         Row(modifier = Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = filter == "gguf", onClick = { filter = "gguf" }, label = { Text("GGUF") })
             FilterChip(selected = filter == "onnx", onClick = { filter = "onnx" }, label = { Text("ONNX") })
+            FilterChip(selected = filter == "pte", onClick = { filter = "pte" }, label = { Text("PTE") })
         }
 
         Text("Max model size:", style = MaterialTheme.typography.labelMedium)
@@ -249,7 +258,7 @@ fun HfBrowserScreen(initialFilter: String, onPicked: (HfModelSelection) -> Unit)
             Text("Pick a file (supported, ≤ cap):", style = MaterialTheme.typography.labelMedium)
             if (loadingFiles) { Text("Loading files…") }
             filesError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            val fmt = if (filter == "onnx") ModelFormat.ONNX else ModelFormat.GGUF
+            val fmt = filterFormat(filter)
             val eligible = files.filter { isEligibleFile(it.name, fmt, maxBytes) }
             val visible = if (showAll) {
                 eligible
@@ -265,12 +274,16 @@ fun HfBrowserScreen(initialFilter: String, onPicked: (HfModelSelection) -> Unit)
             }
             LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(visible) { file ->
-                    val isTarget = if (filter == "onnx") file.name.endsWith(".onnx") else file.name.endsWith(".gguf")
+                    val isTarget = when (filter) {
+                        "onnx" -> file.name.endsWith(".onnx")
+                        "pte" -> file.name.endsWith(".pte")
+                        else -> file.name.endsWith(".gguf")
+                    }
                     if (isTarget) {
                         val (fit, reason) = deviceFit(file, fmt, caps)
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable {
-                                val format = if (filter == "onnx") ModelFormat.ONNX else ModelFormat.GGUF
+                                val format = filterFormat(filter)
                                 onPicked(
                                     HfModelSelection(
                                         repoId = model.id,
@@ -306,6 +319,13 @@ fun HfBrowserScreen(initialFilter: String, onPicked: (HfModelSelection) -> Unit)
             Button(onClick = { selectedModel = null }) { Text("Back to results") }
         }
     }
+}
+
+/** Map the UI's filter chip ("gguf"/"onnx"/"pte") to a [ModelFormat]. */
+private fun filterFormat(filter: String): ModelFormat = when (filter) {
+    "onnx" -> ModelFormat.ONNX
+    "pte" -> ModelFormat.PTE
+    else -> ModelFormat.GGUF
 }
 
 /** Largest size chip (1/2/4/8) the device's free storage can hold, defaulting to 4 GB. */

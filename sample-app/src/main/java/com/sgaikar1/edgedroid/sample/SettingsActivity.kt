@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sgaikar1.edgedroid.common.ModelFormat
 import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 import kotlinx.coroutines.launch
@@ -82,7 +83,11 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
             val sel = result.data?.getSerializableExtra(HfBrowserActivity.EXTRA_SELECTION) as? HfModelSelection
             if (sel != null) {
                 draft = draft.copy(
-                    runtime = if (sel.format.isOnnx) SampleRuntime.ONNX else SampleRuntime.LLAMA,
+                    runtime = when (sel.format) {
+                        ModelFormat.PTE -> SampleRuntime.EXECUTORCH
+                        ModelFormat.ONNX -> SampleRuntime.ONNX
+                        else -> SampleRuntime.LLAMA
+                    },
                     customModel = sel,
                 )
             }
@@ -153,7 +158,11 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text(model.id, style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                "${if (model.format.isOnnx) "ONNX" else "GGUF"} · " +
+                                "${when (model.format) {
+                                    ModelFormat.PTE -> "PTE"
+                                    ModelFormat.ONNX -> "ONNX"
+                                    else -> "GGUF"
+                                }} · " +
                                     model.localPath?.let { formatBytes(java.io.File(it).length()) } ?: "",
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -198,7 +207,7 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                         else -> "AUTO"
                     }
                 }")
-            } else {
+            } else if (draft.runtime == SampleRuntime.ONNX) {
                 DropdownBox(
                     label = "Execution provider",
                     selected = draft.executionProvider ?: "CPU",
@@ -207,6 +216,15 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                 ) { choice ->
                     draft = draft.copy(executionProvider = if (choice == "CPU") null else choice)
                 }
+            } else {
+                // ExecuTorch exports pair the .pte with a tokenizer file; the model entry
+                // (preset or HF-browser pick) carries both URLs.
+                Text(
+                    "ExecuTorch: the .pte module is mmap-loaded with its paired tokenizer. " +
+                        "No GPU/context tuning — replace the preset's model/tokenizer URLs with " +
+                        "your own export (or pick a PTE model in the Hugging Face browser).",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

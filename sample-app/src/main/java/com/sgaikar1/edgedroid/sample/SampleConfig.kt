@@ -4,7 +4,7 @@ import com.sgaikar1.edgedroid.common.ModelFormat
 import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 
-enum class SampleRuntime { LLAMA, ONNX }
+enum class SampleRuntime { LLAMA, ONNX, EXECUTORCH }
 
 data class SampleModel(
     val id: String,
@@ -67,6 +67,24 @@ object SampleModels {
             embeddingCapable = false,
             visionCapable = true,
         ),
+        // ExecuTorch .pte presets are produced by the ExecuTorch export toolchain (python
+        // `export_llm.py`), not downloaded as ready-to-run files. Replace the URL/tokenizerUrl
+        // below with your own export (or pick a real PTE model in the Hugging Face browser) —
+        // the runtime picker, plugin wiring and streaming pipeline are all live.
+        SampleModel(
+            id = "executorch-llama3.2-1b",
+            label = "Llama-3.2-1B (ExecuTorch PTE, replace URL)",
+            runtime = SampleRuntime.EXECUTORCH,
+            format = ModelFormat.PTE,
+            url = "https://huggingface.co/YOUR-ORG/YOUR-EXPORT/resolve/main/model.pte",
+            sizeBytes = null,
+            metadata = mapOf(
+                "template" to "llama",
+                "tokenizerUrl" to "https://huggingface.co/YOUR-ORG/YOUR-EXPORT/resolve/main/tokenizer.bin",
+            ),
+            chatCapable = true,
+            embeddingCapable = false,
+        ),
     )
 
     fun byId(id: String): SampleModel = ALL.first { it.id == id }
@@ -77,13 +95,23 @@ object SampleModels {
     fun fromHf(sel: HfModelSelection): SampleModel = SampleModel(
         id = sel.repoId,
         label = sel.label,
-        runtime = if (sel.format.isOnnx) SampleRuntime.ONNX else SampleRuntime.LLAMA,
+        runtime = when (sel.format) {
+            ModelFormat.PTE -> SampleRuntime.EXECUTORCH
+            ModelFormat.ONNX -> SampleRuntime.ONNX
+            else -> SampleRuntime.LLAMA
+        },
         format = sel.format,
         url = HfHubClient.resolveUrl(sel.repoId, sel.fileName),
         sizeBytes = sel.sizeBytes,
-        metadata = mapOf("template" to if (sel.format.isOnnx) "raw" else "chatml"),
-        chatCapable = !sel.format.isOnnx,
-        embeddingCapable = sel.format.isOnnx,
+        metadata = mapOf(
+            "template" to when (sel.format) {
+                ModelFormat.PTE -> "llama"
+                ModelFormat.ONNX -> "raw"
+                else -> "chatml"
+            },
+        ),
+        chatCapable = sel.format != ModelFormat.ONNX,
+        embeddingCapable = sel.format == ModelFormat.ONNX,
     )
 }
 

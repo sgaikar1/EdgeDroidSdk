@@ -26,9 +26,22 @@ object HfHubClient {
         limit: Int = 50,
     ): List<HfModelSummary> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val url = "$API/models?search=$q&filter=$filter&sort=downloads&direction=-1&limit=$limit"
+        // HF's search API has library tags for gguf/onnx but not pte; search broadly for pte
+        // and let isEligibleFile filter the `.pte` files locally.
+        val apiFilter = when (filter) {
+            "onnx" -> "onnx"
+            "gguf" -> "gguf"
+            else -> null
+        }
+        val url = "$API/models?search=$q" +
+            (apiFilter?.let { "&filter=$it" } ?: "") +
+            "&sort=downloads&direction=-1&limit=$limit"
         val arr = JSONArray(get(url))
-        val fmt = if (filter == "onnx") ModelFormat.ONNX else ModelFormat.GGUF
+        val fmt = when (filter) {
+            "onnx" -> ModelFormat.ONNX
+            "pte" -> ModelFormat.PTE
+            else -> ModelFormat.GGUF
+        }
         val paramsFiltered = minParams > 0f || maxParams > 0f
         val hits = buildList {
             for (i in 0 until arr.length()) {

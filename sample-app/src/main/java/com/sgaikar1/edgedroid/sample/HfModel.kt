@@ -63,9 +63,6 @@ data class HfModelSelection(
     val label: String get() = "$repoId / $fileName"
 }
 
-/** Whether [format] is a chat-capable GGUF (llama) or embedding-capable ONNX model. */
-val ModelFormat.isOnnx: Boolean get() = this == ModelFormat.ONNX
-
 /** GGUF files that are vision encoders / embeddings / rerankers, not chat LLMs. */
 private val GGUF_NON_CHAT = listOf(
     "mmproj", "projector", "clip", "vit", "vision", "mtp",
@@ -77,30 +74,40 @@ private val ONNX_NON_MODEL = listOf(
     "encoder", "decoder", "clip", "vit", "vision", "preprocessor", "tokenizer", "unet", "vae", "pooler",
 )
 
+/** PTE files that are components (tokenizer, metadata), not a standalone runnable module. */
+private val PTE_NON_MODEL = listOf(
+    "tokenizer", "metadata", "preprocessor", "vocab", "bpe", "spm",
+)
+
 /**
  * True if [name] is a file the SDK can actually load for [format] and that fits on a phone:
- * chat-capable GGUF (no mmproj/embedding/reranker) or a standalone ONNX model, and
- * (when [maxBytes] > 0) no larger than [maxBytes].
+ * chat-capable GGUF (no mmproj/embedding/reranker), a standalone ONNX model, or a `.pte`
+ * ExecuTorch module, and (when [maxBytes] > 0) no larger than [maxBytes].
  */
 fun isEligibleFile(name: String, format: ModelFormat, maxBytes: Long): Boolean {
     val lower = name.lowercase()
-    val extOk = if (format == ModelFormat.ONNX) lower.endsWith(".onnx") else lower.endsWith(".gguf")
+    val extOk = when (format) {
+        ModelFormat.ONNX -> lower.endsWith(".onnx")
+        ModelFormat.PTE -> lower.endsWith(".pte")
+        else -> lower.endsWith(".gguf")
+    }
     if (!extOk) return false
-    val blocked = if (format == ModelFormat.ONNX) {
-        ONNX_NON_MODEL.any { lower.contains(it) }
-    } else {
-        GGUF_NON_CHAT.any { lower.contains(it) }
+    val blocked = when (format) {
+        ModelFormat.ONNX -> ONNX_NON_MODEL.any { lower.contains(it) }
+        ModelFormat.PTE -> PTE_NON_MODEL.any { lower.contains(it) }
+        else -> GGUF_NON_CHAT.any { lower.contains(it) }
     }
     return !blocked
 }
 
-/** Whether a runtime for [format] exists on this device (both sample runtimes ship arm64-v8a). */
+/** Whether a runtime for [format] exists on this device (all sample runtimes ship arm64-v8a). */
 private fun runtimeAvailable(format: ModelFormat, caps: DeviceCapabilities): Boolean {
     if (caps.supportedAbis.isEmpty()) return true
-    val runtimeAbis = if (format == ModelFormat.ONNX) {
-        setOf("arm64-v8a", "x86_64", "armeabi-v7a")
-    } else {
-        setOf("arm64-v8a", "x86_64")
+    val runtimeAbis = when (format) {
+        ModelFormat.ONNX -> setOf("arm64-v8a", "x86_64", "armeabi-v7a")
+        // ExecuTorch's official Android AAR ships exactly these two ABIs.
+        ModelFormat.PTE -> setOf("arm64-v8a", "x86_64")
+        else -> setOf("arm64-v8a", "x86_64")
     }
     return runtimeAbis.any { it in caps.supportedAbis }
 }

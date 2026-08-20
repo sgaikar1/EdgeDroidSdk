@@ -46,6 +46,7 @@ Open the project in Android Studio and let it sync, or build from the CLI:
 | `:edgedroid-download` | OkHttp downloader (resume/verify) + the foreground download service |
 | `:runtime-llama` | llama.cpp (submodule) + JNI + `LlamaPlugin` — the only module that knows native code |
 | `:runtime-onnx` | ONNX Runtime + `OnnxPlugin` (embeddings, no-KV LLM, vision) |
+| `:runtime-executorch` | ExecuTorch (`org.pytorch:executorch-android`) + `ExecuTorchPlugin` (PTE, streaming, vision) |
 | `:sample-app` | Jetpack Compose demo: runtime/model picker, HF browser, chat + image attach |
 
 **A rule of thumb:** the SDK core (`:edgedroid-common` / `:edgedroid-core` / `:edgedroid-api`)
