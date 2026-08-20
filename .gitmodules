@@ -2,3 +2,7 @@
 	path = runtime-llama/src/main/cpp/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp.git
 	branch = b10285
+[submodule "runtime-whisper/src/main/cpp/whisper.cpp"]
+	path = runtime-whisper/src/main/cpp/whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp.git
+	branch = v1.9.2

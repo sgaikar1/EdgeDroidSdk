@@ -30,6 +30,8 @@ Your Android App
 
 - **llama.cpp** — GGUF chat models with **Vulkan GPU** (auto fallback to CPU)
 - **Image → text** 🖼️ — attach a photo, ask "what's in this picture?" (SmolVLM / LLaVA-style)
+- **Speech-to-text** 🎙️ — on-device transcription via whisper.cpp (GGML models), with
+  streaming/partial results
 - **ONNX Runtime** — embeddings, no-KV LLM generation, `pixel_values` vision
 - **Reliable downloads** — foreground service keeps big model downloads alive in the
   background (progress notification + pause/resume + sha256 verification)
@@ -39,7 +41,7 @@ Your Android App
   pre-filter the HF browser to models that actually fit this device
 - **Device-aware defaults** — threads, context size and GPU policy derived from the hardware,
   with a one-tap "reset to device defaults" in the sample
-- **Capability system** — streaming, vision, embeddings, tool-calling, JSON, grammar
+- **Capability system** — streaming, vision, embeddings, audio, tool-calling, JSON, grammar
 - **Sample app** with a **Hugging Face model browser**, runtime picker, and chat UI
 
 ## 📦 Installation
@@ -58,7 +60,8 @@ dependencyResolutionManagement {
 dependencies {
     implementation("io.github.sgaikar1:edgedroid-api:0.9.0")
     implementation("io.github.sgaikar1:runtime-llama:0.9.0")   // llama.cpp
-    // or implementation("io.github.sgaikar1:runtime-onnx:0.9.0") // ONNX Runtime
+    // or implementation("io.github.sgaikar1:runtime-onnx:0.9.0")   // ONNX Runtime
+    // or implementation("io.github.sgaikar1:runtime-whisper:0.9.0") // whisper.cpp (speech-to-text)
 }
 ```
 
@@ -75,6 +78,7 @@ ships the **one ABI** for the device, so the real on-device cost is about half t
 | `edgedroid-common` / `core` / `api` / `storage` / `download` | ~0.2 MB total | pure Kotlin |
 | `runtime-llama` | ~39 MB | llama.cpp + Vulkan + vision (mmproj); ~30 MB per-ABI in an APK |
 | `runtime-onnx` | ~0.1 MB | ONNX Runtime `.so`s come from the onnxruntime-android dependency |
+| `runtime-whisper` | ~12 MB | whisper.cpp (CPU); the GGML model itself (~75–142 MB) is downloaded on demand |
 
 A chat-only app adding `edgedroid-api` + `runtime-llama` adds roughly **~30 MB** to the APK.
 
@@ -171,6 +175,50 @@ sdk.load()
 val v: FloatArray = sdk.embeddings("A cat sits on a mat.")   // 384-dim vector
 ```
 
+## 🎙️ Speech-to-text (whisper.cpp)
+
+On-device transcription with **whisper.cpp** — no network, audio never leaves the device. The
+runtime accepts **16-bit little-endian PCM** at any sample rate (it resamples to 16 kHz) and
+returns timestamped segments plus the full text:
+
+```kotlin
+val sdk = EdgeDroid.Builder(context)
+    .runtime(Runtime.plugin(WhisperPlugin()))          // the whisper.cpp runtime
+    .model(
+        Model.remote(
+            id = "ggml-tiny.bin",
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+            sizeBytes = 75_519_416L,
+            format = ModelFormat.CUSTOM,
+        ),
+    )
+    .build()
+
+sdk.models.download()                                  // whisper-tiny GGML model
+sdk.load()
+
+// Full transcription (segments + text):
+val result: TranscriptionResult = sdk.transcribe(pcmBytes, sampleRate)
+result.text                                            // "hello, this is a test"
+result.segments                                        // [TranscriptionSegment(startMs, endMs, text)]
+
+// Streaming / partial results as segments are finalized:
+sdk.transcribeStream(pcmBytes, sampleRate) { segment ->
+    appendToUi(segment.text)
+}
+```
+
+- `pcm` is 16-bit little-endian PCM (mono; stereo is mixed down); `sampleRate` is its rate
+  (e.g. 16000, 44100). Whisper needs 16 kHz — the runtime resamples for you.
+- The runtime declares `Capability.AUDIO` + `Capability.STREAMING`; `checkCompatibility(
+  requiredCapabilities = [AUDIO])` verifies the selected runtime supports it.
+- `TranscriptionOptions` tunes `language` (ISO-639-1 or `"auto"`), `threads`, `temperature`,
+  `initialPrompt`, `maxSegmentChars`, `singleSegment`, `translate`.
+- **Supported models** — classic whisper.cpp **GGML** files: `ggml-tiny.bin` (~75 MB),
+  `ggml-base.bin` (~142 MB), and larger `ggml-small/medium/large*.bin` from
+  [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp). GGUF whisper models
+  also load. The runtime loads whichever file you point at via `Model.local(path)` or download.
+
 ## ⬇️ Downloads — even when the app is backgrounded
 
 Model downloads run in an SDK-provided **foreground service** (`dataSync`) with a progress
@@ -245,6 +293,7 @@ if (modelSize + 256MB > caps.freeStorageBytes) { /* won't fit — don't download
 | --- | --- | --- | --- |
 | `runtime-llama` | GGUF | STREAMING, VISION | CPU + Vulkan GPU auto-fallback, mmproj image→text |
 | `runtime-onnx` | ONNX | STREAMING, EMBEDDINGS, VISION | Prebuilt `.so` (no NDK build); embeddings + no-KV LLM |
+| `runtime-whisper` | GGUF, CUSTOM | AUDIO, STREAMING | whisper.cpp; GGML `.bin` / GGUF speech-to-text, CPU |
 
 **Add your own** — implement the SPI, register it, done:
 
@@ -270,20 +319,24 @@ if a driver fails.
 
 `sample-app/` is a Jetpack Compose demo that shows everything:
 
-- **Runtime + model picker** (Settings screen) — llama.cpp / ONNX, with a **Hugging Face
-  model browser** that filters to device-supported GGUF/ONNX models (size cap auto-set from
-  free storage, fit badges, "Show all" toggle)
+- **Runtime + model picker** (Settings screen) — llama.cpp / ONNX / whisper, with a
+  **Hugging Face model browser** that filters to device-supported GGUF/ONNX models (size cap
+  auto-set from free storage, fit badges, "Show all" toggle)
 - **Device-aware defaults** — Settings shows a device summary, "Recommended: …" hints next to
   threads/context/GPU, and a **Reset to device defaults** button
 - **Chat** with live token streaming, a **Reasoning** area for thinking models, and a
   **Thinking…** indicator
+- **Speech-to-text** (Audio screen) — record via the mic or pick a WAV/audio file, then see
+  partial + final transcription from whisper
 - **Image attach** for vision models, **Embeddings** for ONNX, **Download / Load / Unload**,
   compatibility check, creativity (temperature/top-p/top-k) and system prompt
 
 ## 🔧 Building from source
 
-llama.cpp is a git submodule pinned at `b10285` under `runtime-llama/src/main/cpp/llama.cpp`.
-Native prerequisites (macOS / Apple Silicon):
+llama.cpp is a git submodule pinned at `b10285` under `runtime-llama/src/main/cpp/llama.cpp`;
+whisper.cpp is a git submodule pinned at `v1.9.2` under `runtime-whisper/src/main/cpp/whisper.cpp`.
+Both are ABI-scoped (no model binaries are committed). Native prerequisites (macOS / Apple
+Silicon):
 
 ```sh
 brew install shaderc spirv-headers vulkan-headers ninja

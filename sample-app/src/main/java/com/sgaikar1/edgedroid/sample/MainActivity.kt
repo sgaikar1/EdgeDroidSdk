@@ -161,6 +161,11 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 TextButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
                     Text("Settings")
                 }
+                if (config.model.audioCapable) {
+                    TextButton(onClick = { context.startActivity(Intent(context, AudioActivity::class.java)) }) {
+                        Text("Audio")
+                    }
+                }
             }
         }
 

@@ -3,6 +3,9 @@ package com.sgaikar1.edgedroid.api.internal
 import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TranscriptionOptions
+import com.sgaikar1.edgedroid.common.TranscriptionResult
+import com.sgaikar1.edgedroid.common.TranscriptionSegment
 import com.sgaikar1.edgedroid.core.ChatSession
 import com.sgaikar1.edgedroid.core.LlmEngine
 import com.sgaikar1.edgedroid.core.LlmEngineState
@@ -135,6 +138,26 @@ internal class SdkEngine(
         ensureReady()
         val r = runtime ?: throw IllegalStateException("Runtime not ready")
         return r.embeddings(handle, text)
+    }
+
+    override suspend fun transcribe(
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions,
+    ): TranscriptionResult {
+        ensureReady()
+        val r = runtime ?: throw IllegalStateException("Runtime not ready")
+        return r.transcribe(handle, pcm, sampleRate, options)
+    }
+
+    override fun transcribeStream(
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions,
+    ): Flow<TranscriptionSegment> = flow {
+        ensureReady()
+        val r = runtime ?: throw IllegalStateException("Runtime not ready")
+        r.transcribeStream(handle, pcm, sampleRate, options).collect { emit(it) }
     }
 
     override suspend fun stop() {

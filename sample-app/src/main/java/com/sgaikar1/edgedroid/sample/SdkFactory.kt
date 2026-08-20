@@ -8,6 +8,7 @@ import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.runtime.llama.LlamaPlugin
 import com.sgaikar1.edgedroid.runtime.onnx.OnnxPlugin
+import com.sgaikar1.edgedroid.runtime.whisper.WhisperPlugin
 import java.io.File
 import kotlin.time.Duration.Companion.seconds
 
@@ -28,7 +29,11 @@ object SdkFactory {
         val builder = EdgeDroid.Builder(context)
             .runtime(
                 Runtime.plugin(
-                    if (model.runtime == SampleRuntime.LLAMA) LlamaPlugin() else OnnxPlugin(),
+                    when (model.runtime) {
+                        SampleRuntime.LLAMA -> LlamaPlugin()
+                        SampleRuntime.ONNX -> OnnxPlugin()
+                        SampleRuntime.WHISPER -> WhisperPlugin()
+                    },
                 ),
             )
             .model(modelToSdkModel(context, model, config))
@@ -49,6 +54,7 @@ object SdkFactory {
             SampleRuntime.ONNX -> {
                 config.executionProvider?.let { builder.extra("executionProvider", it) }
             }
+            SampleRuntime.WHISPER -> Unit
         }
         return builder.build()
     }

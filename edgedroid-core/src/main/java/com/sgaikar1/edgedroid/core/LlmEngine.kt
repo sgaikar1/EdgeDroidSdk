@@ -2,6 +2,9 @@ package com.sgaikar1.edgedroid.core
 
 import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TranscriptionOptions
+import com.sgaikar1.edgedroid.common.TranscriptionResult
+import com.sgaikar1.edgedroid.common.TranscriptionSegment
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -40,4 +43,25 @@ interface LlmEngine {
     suspend fun embeddings(text: String): FloatArray
     suspend fun stop()
     val state: StateFlow<LlmEngineState>
+
+    /**
+     * Transcribe [pcm] (16-bit little-endian PCM at [sampleRate] Hz) into timestamped
+     * segments + full text using the loaded model. Requires the selected runtime to declare
+     * [Capability.AUDIO]; other runtimes throw [UnsupportedOperationException].
+     */
+    suspend fun transcribe(
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions = TranscriptionOptions.DEFAULT,
+    ): TranscriptionResult
+
+    /**
+     * Same as [transcribe], but emits each segment as it is finalized (partial/streaming
+     * results where the backend supports them).
+     */
+    fun transcribeStream(
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions = TranscriptionOptions.DEFAULT,
+    ): Flow<TranscriptionSegment>
 }

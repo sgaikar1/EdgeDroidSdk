@@ -2,6 +2,9 @@ package com.sgaikar1.edgedroid.core
 
 import com.sgaikar1.edgedroid.common.GenerationOptions
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TranscriptionOptions
+import com.sgaikar1.edgedroid.common.TranscriptionResult
+import com.sgaikar1.edgedroid.common.TranscriptionSegment
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -31,4 +34,33 @@ interface Runtime {
     suspend fun embeddings(handle: ModelHandle, text: String): FloatArray
     suspend fun stop(handle: ModelHandle)
     val state: StateFlow<RuntimeState>
+
+    /**
+     * Transcribe [pcm] (16-bit little-endian PCM at [sampleRate] Hz) into timestamped
+     * segments + full text. Only supported by runtimes declaring [Capability.AUDIO];
+     * other runtimes throw [UnsupportedOperationException]. Default implementation so
+     * existing text runtimes are unaffected.
+     */
+    suspend fun transcribe(
+        handle: ModelHandle,
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions = TranscriptionOptions.DEFAULT,
+    ): TranscriptionResult {
+        throw UnsupportedOperationException("runtime does not support audio transcription")
+    }
+
+    /**
+     * Same as [transcribe], but emits each segment as it is finalized (partial/streaming
+     * results where the backend supports them). Default implementation so existing text
+     * runtimes are unaffected.
+     */
+    fun transcribeStream(
+        handle: ModelHandle,
+        pcm: ByteArray,
+        sampleRate: Int,
+        options: TranscriptionOptions = TranscriptionOptions.DEFAULT,
+    ): Flow<TranscriptionSegment> {
+        throw UnsupportedOperationException("runtime does not support streaming transcription")
+    }
 }

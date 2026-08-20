@@ -198,7 +198,7 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                         else -> "AUTO"
                     }
                 }")
-            } else {
+            } else if (draft.runtime == SampleRuntime.ONNX) {
                 DropdownBox(
                     label = "Execution provider",
                     selected = draft.executionProvider ?: "CPU",
@@ -207,6 +207,12 @@ fun SettingsScreen(store: SampleStore, onApply: (SampleConfig) -> Unit) {
                 ) { choice ->
                     draft = draft.copy(executionProvider = if (choice == "CPU") null else choice)
                 }
+            } else {
+                Text(
+                    "Whisper runs CPU-only on-device speech transcription.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

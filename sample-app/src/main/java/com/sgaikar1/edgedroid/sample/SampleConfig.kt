@@ -4,7 +4,7 @@ import com.sgaikar1.edgedroid.common.ModelFormat
 import com.sgaikar1.edgedroid.core.DeviceCapabilities
 import com.sgaikar1.edgedroid.core.GpuConfig
 
-enum class SampleRuntime { LLAMA, ONNX }
+enum class SampleRuntime { LLAMA, ONNX, WHISPER }
 
 data class SampleModel(
     val id: String,
@@ -17,6 +17,7 @@ data class SampleModel(
     val chatCapable: Boolean,
     val embeddingCapable: Boolean,
     val visionCapable: Boolean = false,
+    val audioCapable: Boolean = false,
     val mmprojUrl: String? = null,
 ) {
     /**
@@ -66,6 +67,30 @@ object SampleModels {
             chatCapable = true,
             embeddingCapable = false,
             visionCapable = true,
+        ),
+        SampleModel(
+            id = "ggml-tiny.bin",
+            label = "whisper-tiny (GGML, multilingual)",
+            runtime = SampleRuntime.WHISPER,
+            format = ModelFormat.CUSTOM,
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+            sizeBytes = 75_519_416L,
+            metadata = emptyMap(),
+            chatCapable = false,
+            embeddingCapable = false,
+            audioCapable = true,
+        ),
+        SampleModel(
+            id = "ggml-base.bin",
+            label = "whisper-base (GGML, multilingual)",
+            runtime = SampleRuntime.WHISPER,
+            format = ModelFormat.CUSTOM,
+            url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+            sizeBytes = 141_813_904L,
+            metadata = emptyMap(),
+            chatCapable = false,
+            embeddingCapable = false,
+            audioCapable = true,
         ),
     )
 
