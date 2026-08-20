@@ -30,8 +30,11 @@ sealed class GpuConfig {
     }
 
     companion object {
-        /** Convenience for [Layers]. */
-        @JvmStatic
+        /**
+         * Convenience for [Layers]. Kotlin callers: `GpuConfig.layers(n)`.
+         * Java callers: `GpuConfigCompat.layers(n)` (see `androidMain` — `@JvmStatic` cannot
+         * be used in common code, so the JVM static entry point lives on the compat facade).
+         */
         fun layers(n: Int): GpuConfig = Layers(n)
     }
 }

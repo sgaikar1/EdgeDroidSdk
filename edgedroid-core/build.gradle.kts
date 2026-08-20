@@ -1,10 +1,43 @@
-import com.vanniktech.maven.publish.AndroidSingleVariantLibrary
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.maven.publish)
+}
+
+kotlin {
+    androidTarget {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
+        publishLibraryVariants("release")
+    }
+    // Declare each iOS target exactly once and reuse the references for the framework config.
+    val iosTargets = listOf(iosArm64(), iosSimulatorArm64())
+
+    // Export an iOS framework so an Xcode app can consume the SPI (spike proof: this must link).
+    iosTargets.forEach { iosTarget ->
+        iosTarget.binaries.framework {
+            baseName = "EdgeDroidCore"
+            isStatic = true
+        }
+    }
+
+    sourceSets {
+        commonMain.dependencies {
+            api(project(":edgedroid-common"))
+            api(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
+        }
+        androidMain.dependencies {
+            implementation(libs.kotlinx.coroutines.android)
+        }
+        androidUnitTest.dependencies {
+            implementation(libs.junit)
+        }
+    }
 }
 
 android {
@@ -18,27 +51,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
 }
-
-dependencies {
-    api(project(":edgedroid-common"))
-    api(libs.kotlinx.coroutines.android)
-    implementation(libs.kotlinx.serialization.json)
-    testImplementation(libs.junit)
-}
-
 
 mavenPublishing {
-    configure(AndroidSingleVariantLibrary("release", sourcesJar = true, publishJavadocJar = false))
+    configure(com.vanniktech.maven.publish.KotlinMultiplatform(sourcesJar = true, javadocJar = com.vanniktech.maven.publish.JavadocJar.Empty()))
     signAllPublications()
     publishToMavenCentral(host = com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
     coordinates("io.github.sgaikar1", project.name, libs.versions.sdkVersion.get())
     pom {
         name.set("EdgeDroid ${project.name}")
-        description.set("EdgeDroid: on-device LLM SDK for Android - ${project.name} module")
+        description.set("EdgeDroid: on-device LLM SDK for Android and iOS - ${project.name} module (Kotlin Multiplatform)")
         url.set("https://github.com/sgaikar1/EdgeDroidSdk")
         licenses {
             license {
@@ -64,6 +86,3 @@ mavenPublishing {
         }
     }
 }
-
-
-apply(from = rootProject.file("gradle/javadoc-jar.gradle.kts"))
