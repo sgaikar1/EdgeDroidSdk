@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.core
 
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.Token
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,4 +32,13 @@ interface Runtime {
     suspend fun embeddings(handle: ModelHandle, text: String): FloatArray
     suspend fun stop(handle: ModelHandle)
     val state: StateFlow<RuntimeState>
+
+    /**
+     * Aggregate generation statistics for this runtime session (since the model was loaded).
+     * Counters are updated as a side effect of [generate]; values for the current/last
+     * generation are visible once its flow completes. Runtimes with native timing support
+     * (e.g. llama.cpp `llama_perf_*`) report real decode/eval times; others fall back to
+     * wall-clock measurements.
+     */
+    fun stats(): GenerationStats
 }

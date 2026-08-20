@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.api.internal
 
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.Token
 import com.sgaikar1.edgedroid.core.ChatSession
@@ -136,6 +137,8 @@ internal class SdkEngine(
         val r = runtime ?: throw IllegalStateException("Runtime not ready")
         return r.embeddings(handle, text)
     }
+
+    override fun stats(): GenerationStats = runtime?.stats() ?: GenerationStats()
 
     override suspend fun stop() {
         val r = runtime

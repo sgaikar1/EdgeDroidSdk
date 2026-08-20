@@ -4,7 +4,9 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TokenMetrics
 import com.sgaikar1.edgedroid.core.LlmEngineState
 import com.sgaikar1.edgedroid.core.ModelDownloadState
 import com.sgaikar1.edgedroid.core.PromptProcessor
@@ -19,6 +21,7 @@ data class ChatMessage(
     val role: String,
     val text: String,
     val reasoning: String? = null,
+    val metrics: String? = null,
 )
 
 class ChatViewModel(
@@ -41,6 +44,9 @@ class ChatViewModel(
 
     private val _streamingText = MutableStateFlow<String?>(null)
     val streamingText: StateFlow<String?> = _streamingText.asStateFlow()
+
+    private val _streamingMetrics = MutableStateFlow<String?>(null)
+    val streamingMetrics: StateFlow<String?> = _streamingMetrics.asStateFlow()
 
     private val _reasoningText = MutableStateFlow<String?>(null)
     val reasoningText: StateFlow<String?> = _reasoningText.asStateFlow()
@@ -85,6 +91,7 @@ class ChatViewModel(
             }
             _messages.value = emptyList()
             _streamingText.value = null
+            _streamingMetrics.value = null
             _reasoningText.value = null
             _embeddingResult.value = null
             _compatibility.value = null
@@ -101,14 +108,17 @@ class ChatViewModel(
 
         _messages.update { it + ChatMessage("user", text) }
         _streamingText.value = ""
+        _streamingMetrics.value = null
         _reasoningText.value = null
         val raw = StringBuilder()
         val answer = StringBuilder()
         val reasoning = StringBuilder()
+        var lastMetrics: TokenMetrics? = null
 
         generationJob = viewModelScope.launch {
             val image = _attachedImage.value
             try {
+                val statsBefore = sdk.stats()
                 sdk.stream(
                     text,
                     images = if (image != null) {
@@ -134,12 +144,29 @@ class ChatViewModel(
                         answer.append(a)
                         _streamingText.value = a.ifEmpty { null }
                     }
+                    token.metrics?.let { m ->
+                        lastMetrics = m
+                        _streamingMetrics.value =
+                            "tok/s ${"%.1f".format(m.tokensPerSecond)}" +
+                                " · avg ${"%.1f".format(m.averageTokensPerSecond)}" +
+                                " · TTFT ${m.timeToFirstTokenMs} ms"
+                    }
+                }
+                // Per-reply aggregate: delta of the session counters across this call, so the
+                // line describes this reply (not the whole session), plus this reply's TTFT.
+                val reply = sdk.stats() - statsBefore
+                val ttft = lastMetrics?.timeToFirstTokenMs
+                val metricsLine = buildString {
+                    append("${"%.1f".format(reply.tokensPerSecond)} tok/s · ")
+                    append("${reply.evalTokens} eval tok · ${reply.totalMs} ms")
+                    if (ttft != null) append(" · TTFT $ttft ms")
                 }
                 _messages.update {
                     it + ChatMessage(
                         "assistant",
                         answer.toString(),
                         reasoning.toString().ifEmpty { null },
+                        metrics = metricsLine,
                     )
                 }
                 Log.d("EdgeDroid.Sample", "Answer (${answer.length}): ${answer}")
@@ -148,6 +175,7 @@ class ChatViewModel(
                 Log.e("EdgeDroid.Sample", "Generation failed", t)
             } finally {
                 _streamingText.value = null
+                _streamingMetrics.value = null
                 _reasoningText.value = null
                 clearImage()
             }
@@ -268,5 +296,6 @@ class ChatViewModel(
         _messages.value = emptyList()
         _reasoningText.value = null
         _streamingText.value = null
+        _streamingMetrics.value = null
     }
 }

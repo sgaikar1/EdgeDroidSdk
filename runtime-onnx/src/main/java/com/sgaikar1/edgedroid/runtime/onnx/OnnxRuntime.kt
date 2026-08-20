@@ -4,14 +4,17 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.LogProvider
 import com.sgaikar1.edgedroid.common.Token
+import com.sgaikar1.edgedroid.common.TokenMetrics
 import com.sgaikar1.edgedroid.core.Model
 import com.sgaikar1.edgedroid.core.ModelHandle
 import com.sgaikar1.edgedroid.core.PromptProcessor
 import com.sgaikar1.edgedroid.core.Runtime
 import com.sgaikar1.edgedroid.core.RuntimeConfig
 import com.sgaikar1.edgedroid.core.RuntimeState
+import com.sgaikar1.edgedroid.core.StreamMetricsTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.FloatBuffer
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * ONNX Runtime implementation. Currently supports embeddings (B1); LLM generation and vision
@@ -41,6 +45,13 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
     private var visionInputName: String? = null
     private var visionWidth = 224
     private var visionHeight = 224
+
+    // Cumulative generation stats for the current session (since load). ONNX has no native
+    // timing hooks, so these are wall-clock measurements taken around the autoregressive loop.
+    // Reset whenever a model is loaded/unloaded so stats() matches the documented semantics.
+    private val stats = AtomicReference(GenerationStats())
+
+    override fun stats(): GenerationStats = stats.get()
 
     override suspend fun initialize() {
         if (env != null) return
@@ -72,6 +83,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             detectVisionInput(s)
             1L
         }
+        stats.set(GenerationStats())
         _state.value = RuntimeState.ModelLoaded
         return handle
     }
@@ -133,6 +145,7 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             session = null
             tokenizer = null
         }
+        stats.set(GenerationStats())
         _state.value = RuntimeState.Initialized
     }
 
@@ -171,6 +184,9 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
             allIds += promptIds
             var index = 0L
             val eosId = eosTokenId
+            val metrics = StreamMetricsTracker()
+            var firstTokenMetrics: TokenMetrics? = null
+            val startedAtNs = System.nanoTime()
 
             // Vision: decode the first image attachment into a pixel_values tensor once.
             val visionTensor: OnnxTensor? = run {
@@ -239,7 +255,16 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
                         if (tokenId == eosId) break
                         val piece = tok.decode(listOf(tokenId))
                         if (piece.isNotEmpty()) {
-                            trySend(Token(index = index++, id = tokenId.toLong(), text = piece))
+                            val tokenMetrics = metrics.onToken()
+                            if (firstTokenMetrics == null) firstTokenMetrics = tokenMetrics
+                            trySend(
+                                Token(
+                                    index = index++,
+                                    id = tokenId.toLong(),
+                                    text = piece,
+                                    metrics = tokenMetrics,
+                                ),
+                            )
                         }
                         allIds += tokenId.toLong()
                     } finally {
@@ -250,6 +275,23 @@ internal class OnnxRuntime(private val config: RuntimeConfig) : Runtime {
                 visionTensor?.close()
                 stopRequested = false
             }
+
+            // Wall-clock aggregate for this call (ONNX exposes no native timing hooks).
+            val totalMs = (System.nanoTime() - startedAtNs) / 1_000_000L
+            val ttftMs = firstTokenMetrics?.timeToFirstTokenMs ?: totalMs
+            stats.updateAndGet { previous ->
+                previous + GenerationStats(
+                    promptTokens = promptIds.size.toLong(),
+                    evalTokens = metrics.emittedTokens,
+                    promptMs = ttftMs,
+                    evalMs = (totalMs - ttftMs).coerceAtLeast(0L),
+                )
+            }
+            config.log.log(
+                LogProvider.Level.INFO, TAG,
+                "generation: eval=${metrics.emittedTokens} tok in ~$totalMs ms" +
+                    " (${"%.1f".format(metrics.emittedTokens * 1000.0 / totalMs.coerceAtLeast(1))} tok/s), TTFT=${ttftMs} ms",
+            )
         }
         close()
     }

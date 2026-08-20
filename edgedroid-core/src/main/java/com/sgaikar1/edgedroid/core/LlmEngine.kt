@@ -1,6 +1,7 @@
 package com.sgaikar1.edgedroid.core
 
 import com.sgaikar1.edgedroid.common.GenerationOptions
+import com.sgaikar1.edgedroid.common.GenerationStats
 import com.sgaikar1.edgedroid.common.Token
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,4 +41,10 @@ interface LlmEngine {
     suspend fun embeddings(text: String): FloatArray
     suspend fun stop()
     val state: StateFlow<LlmEngineState>
+
+    /**
+     * Aggregate generation statistics for the active runtime session (eval tokens, prompt/eval
+     * milliseconds, tok/s). See [Runtime.stats] for semantics.
+     */
+    fun stats(): GenerationStats
 }
