@@ -45,6 +45,7 @@ android {
 
 dependencies {
     implementation(project(":edgedroid-api"))
+    implementation(project(":edgedroid-server"))
     implementation(project(":runtime-llama"))
     implementation(project(":runtime-onnx"))
 
@@ -56,6 +57,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.kotlinx.coroutines.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

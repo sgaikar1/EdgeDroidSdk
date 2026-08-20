@@ -171,6 +171,69 @@ sdk.load()
 val v: FloatArray = sdk.embeddings("A cat sits on a mat.")   // 384-dim vector
 ```
 
+## 🌐 Local OpenAI-compatible server (`edgedroid-server`)
+
+> **Placement decision (issue #8):** the server lives in its own optional module,
+> `edgedroid-server`, rather than inside the sample UI. The wire protocol (request parsing,
+> response/SSE building, option mapping) is pure Kotlin/JVM-testable code, and any app can
+> embed the server — the sample app only wires it to the UI and the app lifecycle. This keeps
+> the SDK core, the server, and the demo decoupled, and lets the protocol have real unit tests
+> without an emulator.
+
+`edgedroid-server` exposes an **OpenAI-compatible HTTP API** backed by your [EdgeDroid]
+instance, so existing OpenAI clients (OpenAI SDKs, curl, LangChain, Ollama-style tooling)
+can talk to your on-device model through `http://127.0.0.1:PORT`.
+
+**Endpoints**
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /v1/models` | Lists the on-device model(s) |
+| `POST /v1/chat/completions` | Chat completions — **streaming** (`stream: true`, SSE) and non-streaming |
+| `POST /v1/embeddings` | Embeddings when the loaded runtime supports them (e.g. the ONNX runtime); returns `501` otherwise |
+
+**Server lifecycle** — bind loopback and start/stop it with your app:
+
+```kotlin
+val server = EdgeDroidOpenAiServer(
+    sdk = sdk,
+    port = 8080,
+    defaultModelId = sdk.models.available().firstOrNull()?.id, // optional hint for /v1/models
+)
+server.start()   // binds 127.0.0.1:8080
+// …app is running…
+server.stop()
+```
+
+> **⚠️ Security note:** the server binds **only to `127.0.0.1`** — it is unreachable from
+> other devices or the network — but it accepts unauthenticated requests from any process on
+> the device, and it ignores API keys. Treat it as a development/demo tool: use it through
+> `adb reverse` only on devices you control, and never expose or port-forward the port to a
+> routable interface. It stops when the app leaves the foreground.
+
+**Request mapping.** Each request is stateless: the message array is mapped onto the SDK's
+`ChatSession` (via `EdgeDroid.seedChat` + `stream`/`generate`), so multi-turn conversations,
+`system` prompts, `temperature`/`top_p`/`top_k`/`max_tokens`/`stop` are honored. `content`
+arrays with `data:`-URI images are forwarded to vision-capable runtimes; `n` is fixed to 1.
+
+**Try it from a computer** (with the phone attached over USB):
+
+```sh
+adb reverse tcp:8080 tcp:8080
+curl -N http://127.0.0.1:8080/v1/models
+curl -N http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"smollm2-135m-instruct",
+       "messages":[{"role":"user","content":"Say hello in one sentence"}],
+       "stream":true}'
+```
+
+Point any OpenAI client at `http://127.0.0.1:8080/v1` (any `api_key`/`base_url`/`model`
+value works — the server always runs the one loaded model).
+
+The sample app has a **Settings → "Local OpenAI server"** toggle (off by default) and shows
+the server URL + `adb reverse` hint on the chat screen while it is running.
+
 ## ⬇️ Downloads — even when the app is backgrounded
 
 Model downloads run in an SDK-provided **foreground service** (`dataSync`) with a progress

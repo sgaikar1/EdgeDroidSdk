@@ -101,6 +101,8 @@ data class SampleConfig(
     val topP: Float = 0.95f,
     val topK: Int = 40,
     val systemPrompt: String = "",
+    val serverEnabled: Boolean = false,
+    val serverPort: Int = 8080,
 ) {
     /** The effective model: a preset or the HF-browser pick. */
     val model: SampleModel

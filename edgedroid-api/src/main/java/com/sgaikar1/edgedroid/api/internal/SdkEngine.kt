@@ -60,6 +60,22 @@ internal class SdkEngine(
         session.reset()
     }
 
+    /**
+     * Reset the session and seed it from an external conversation (used by the OpenAI
+     * server module to map request message arrays onto the session before streaming).
+     */
+    fun seedSession(systemPrompt: String?, messages: List<Pair<String, String>>) {
+        session.reset()
+        if (systemPrompt != null) session.systemPrompt = systemPrompt
+        for ((role, text) in messages) {
+            when (role.lowercase()) {
+                "user" -> session.addUserMessage(text)
+                "assistant" -> session.addAssistantMessage(text)
+                "system" -> session.systemPrompt = text
+            }
+        }
+    }
+
     val template: PromptProcessor.Template
         get() = activeModel?.let { processor.templateFor(it) } ?: PromptProcessor.Template.CHATML
 

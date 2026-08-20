@@ -72,6 +72,8 @@ class ChatViewModel(
 
     val downloadedIds: StateFlow<Set<String>> = store.downloadedIds
 
+    val serverState: StateFlow<ServerUiState> = store.serverState
+
     private var generationJob: Job? = null
 
     fun isDownloaded(modelId: String): Boolean = modelId in store.downloadedIds.value
