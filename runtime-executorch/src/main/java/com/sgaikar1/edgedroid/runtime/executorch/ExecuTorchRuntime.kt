@@ -95,6 +95,8 @@ internal class ExecuTorchRuntime(private val config: RuntimeConfig) : Runtime {
             runCatching { loaded.module.stop() }
             runCatching { loaded.module.close() }
         }
+        // The module's config is no longer valid; drop cached derived configs for it.
+        ExecuTorchConfigTransformer.clearCache()
         _state.value = RuntimeState.Initialized
     }
 

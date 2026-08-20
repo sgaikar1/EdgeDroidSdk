@@ -46,8 +46,14 @@ object ExecuTorchConfigTransformer {
     const val KEY_LOAD_MODE = "loadMode"
     const val KEY_TEMPERATURE = "temperature"
 
-    private val generationCache = java.util.concurrent.ConcurrentHashMap<String, LlmGenerationConfig>()
-    private val moduleCache = java.util.concurrent.ConcurrentHashMap<String, ExecuTorchModuleConfig>()
+    // Bounded caches: generation keys include a prompt-derived seqLen (varies per prompt length),
+    // so an unbounded cache would leak one entry per distinct prompt in a long session. The LRU
+    // bounds memory and the runtime clears the caches on unload.
+    private const val MAX_GENERATION_ENTRIES = 128
+    private const val MAX_MODULE_ENTRIES = 16
+
+    private val generationCache = BoundedLruCache<String, LlmGenerationConfig>(MAX_GENERATION_ENTRIES)
+    private val moduleCache = BoundedLruCache<String, ExecuTorchModuleConfig>(MAX_MODULE_ENTRIES)
 
     /**
      * Build (and cache) the ExecuTorch module-executor config for [model] under [config].
@@ -63,8 +69,7 @@ object ExecuTorchConfigTransformer {
             append('|').append(config.extras)
         }
         return moduleCache.getOrPut(cacheKey) {
-            val modulePath = model.localPath ?: throw IllegalArgumentException(
-                "Model '${model.id}' has no local path — ensure it is downloaded before load",
+            val modulePath = model.localPath ?: throw IllegalArgumentException(                "Model '${model.id}' has no local path — ensure it is downloaded before load",
             )
             val tokenizerPath = model.metadata[KEY_TOKENIZER_PATH]
                 ?: config.extras[KEY_TOKENIZER_PATH] as? String
@@ -134,4 +139,27 @@ object ExecuTorchConfigTransformer {
             // explicitly disables memory mapping.
             else -> if (config.memory.mmap) LlmModuleConfig.LOAD_MODE_MMAP else LlmModuleConfig.LOAD_MODE_FILE
         }
+}
+
+/**
+ * Small, thread-safe LRU used to bound the derived-config caches so a long session never leaks
+ * memory (evicts least-recently-used entries past [maxSize]).
+ */
+private class BoundedLruCache<K, V>(private val maxSize: Int) {
+
+    private val map = object : LinkedHashMap<K, V>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean =
+            size > maxSize
+    }
+
+    @Synchronized
+    fun getOrPut(key: K, value: () -> V): V {
+        map[key]?.let { return it }
+        return value().also { map[key] = it }
+    }
+
+    @Synchronized
+    fun clear() {
+        map.clear()
+    }
 }
