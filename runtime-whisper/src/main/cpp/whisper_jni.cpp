@@ -36,6 +36,9 @@ static std::mutex g_mutex;
 static std::unordered_map<jlong, WhisperSession*> g_sessions;
 
 // Last whisper.cpp ERROR/WARN log lines, captured so load failures can be surfaced.
+// Guarded because the whisper log callback may fire from a worker thread while the caller
+// clears/reads it in nativeLoadModel.
+static std::mutex g_log_mutex;
 static std::string g_last_error;
 
 static void log_capture_cb(ggml_log_level level, const char* text, void* /*user_data*/) {
@@ -44,6 +47,7 @@ static void log_capture_cb(ggml_log_level level, const char* text, void* /*user_
     if (!s.empty() && s.back() == '\n') s.pop_back();
     if (s.empty()) return;
     if (level == GGML_LOG_LEVEL_ERROR || level == GGML_LOG_LEVEL_WARN) {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
         if (g_last_error.size() < 2048) g_last_error += s + " | ";
         else g_last_error.replace(g_last_error.end() - 3, g_last_error.end(), s + " | ");
     }
@@ -102,10 +106,11 @@ static std::vector<float> resample(const std::vector<float>& in, int in_rate, in
     return out;
 }
 
-// Abort hook: whisper_full polls this during compute; return false to stop.
+// Abort hook: whisper.cpp/ggml abort callbacks return true to abort (see ggml.h); whisper_full
+// polls this during compute. We abort when a stop has been requested.
 static bool abort_cb(void* data) {
     auto* s = static_cast<WhisperSession*>(data);
-    return !s->stop.load();
+    return s->stop.load();
 }
 
 struct SegmentCallbackCtx {
@@ -122,13 +127,14 @@ static void on_new_segment(whisper_context* /*ctx*/, whisper_state* state, int n
 
     const int n_segments = whisper_full_n_segments_from_state(state);
     for (int i = n_segments - n_new; i < n_segments; ++i) {
-        const int64_t t0 = whisper_full_get_segment_t0_from_state(state, i);
-        const int64_t t1 = whisper_full_get_segment_t1_from_state(state, i);
+        // whisper.cpp reports segment times in centiseconds (10 ms units); convert to ms.
+        const int64_t t0_ms = whisper_full_get_segment_t0_from_state(state, i) * 10;
+        const int64_t t1_ms = whisper_full_get_segment_t1_from_state(state, i) * 10;
         const char* text = whisper_full_get_segment_text_from_state(state, i);
         if (text == nullptr) continue;
 
         jstring jText = cb->env->NewStringUTF(text);
-        cb->env->CallVoidMethod(cb->callback, cb->onSegment, (jlong) t0, (jlong) t1, jText);
+        cb->env->CallVoidMethod(cb->callback, cb->onSegment, (jlong) t0_ms, (jlong) t1_ms, jText);
         cb->env->DeleteLocalRef(jText);
         if (cb->env->ExceptionCheck()) {
             cb->env->ExceptionClear();
@@ -152,7 +158,10 @@ Java_com_sgaikar1_edgedroid_runtime_whisper_NativeWhisper_nativeLoadModel(
     whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false; // CPU-only on Android (ggml CPU backend).
 
-    g_last_error.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        g_last_error.clear();
+    }
     whisper_log_set(log_capture_cb, nullptr);
 
     whisper_context* ctx = whisper_init_from_file_with_params(path, cparams);
@@ -160,8 +169,11 @@ Java_com_sgaikar1_edgedroid_runtime_whisper_NativeWhisper_nativeLoadModel(
 
     if (!ctx) {
         std::string message = "failed to load whisper model";
-        if (!g_last_error.empty()) {
-            message += ": " + g_last_error;
+        {
+            std::lock_guard<std::mutex> lock(g_log_mutex);
+            if (!g_last_error.empty()) {
+                message += ": " + g_last_error;
+            }
         }
         LOGE("%s", message.c_str());
         jni_throw(env, message.c_str());
@@ -217,8 +229,10 @@ Java_com_sgaikar1_edgedroid_runtime_whisper_NativeWhisper_nativeTranscribe(
     whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     wparams.n_threads = nThreads > 0 ? nThreads : 4;
     wparams.translate = translate != 0;
+    // A null language makes whisper.cpp auto-detect internally and still transcribe. Keep
+    // detect_language false: when true, whisper_full returns right after detection (no text).
     wparams.language = auto_lang ? nullptr : lang;
-    wparams.detect_language = auto_lang;
+    wparams.detect_language = false;
     wparams.temperature = temperature;
     wparams.initial_prompt = prompt;
     wparams.max_len = maxSegmentChars > 0 ? maxSegmentChars : 0;
@@ -280,6 +294,8 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_sgaikar1_edgedroid_runtime_whisper_NativeWhisper_nativeUnload(JNIEnv*, jobject, jlong handle) {
     WhisperSession* s = remove_session(handle);
     if (!s) return;
+    // Wait for any in-flight transcription to finish before freeing the context.
+    std::lock_guard<std::mutex> lock(s->session_mutex);
     if (s->ctx) whisper_free(s->ctx);
     delete s;
 }
