@@ -9,8 +9,9 @@ import fi.iki.elonen.NanoHTTPD.Response
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.Semaphore
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,9 +38,10 @@ import kotlinx.coroutines.sync.withLock
  * handle, so concurrent completions queue behind a mutex.
  *
  * ## Streaming liveness
- * SSE responses never compress (see [useGzipWhenAccepted]) and each stream is fed through a
- * bounded pipe: a client that stops reading for [STREAM_WRITE_TIMEOUT_MS] causes the
- * generation to abort so the generation mutex is released and other endpoints stay responsive.
+ * SSE responses never compress (see [useGzipWhenAccepted]) and each stream is fed through
+ * [StreamPipe], a pipe bounded in **bytes**: a client that stops reading for
+ * [STREAM_WRITE_TIMEOUT_MS] causes the generation to abort so the generation mutex is
+ * released and other endpoints stay responsive.
  *
  * ## Placement
  * This module is intentionally separate from the sample UI so any app can embed it, and the
@@ -92,7 +94,7 @@ class EdgeDroidOpenAiServer(
         synchronized(lock) {
             if (!running) return
             running = false
-            // Closing the pipes unblocks their producers, ending in-flight generations.
+            // Aborting the pipes unblocks their producers, ending in-flight generations.
             activePipes.forEach { pipe -> pipe.abort() }
             activePipes.clear()
             super.stop()
@@ -246,82 +248,15 @@ class EdgeDroidOpenAiServer(
         return response
     }
 
-    /**
-     * Bounded, timeout-guarded byte pipe that backs the SSE response. The generation coroutine
-     * [offer]s chunk-sized writes; NanoHTTPD's response sender [read]s them. If the client
-     * stops reading, the queue fills and [offer] fails after [StreamPipe.writeTimeoutMs],
-     * which aborts the generation instead of wedging the generation mutex.
-     */
-    private class StreamPipe(
-        private val capacity: Int,
-        private val writeTimeoutMs: Long,
-    ) : InputStream() {
-        private val queue = LinkedBlockingQueue<ByteArray?>(capacity)
-        @Volatile private var closed = false
-        private var current: ByteArray? = null
-        private var offset = 0
-        private var eof = false
-
-        /** @return false when the pipe stayed full (client not reading) for [writeTimeoutMs]. */
-        fun offer(data: ByteArray): Boolean {
-            if (closed) return false
-            return queue.offer(data, writeTimeoutMs, TimeUnit.MILLISECONDS)
-        }
-
-        /** Best-effort write for tail/error events; never blocks generation forever. */
-        fun offerTail(data: ByteArray?) {
-            if (closed) return
-            if (!queue.offer(data, TAIL_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                // Client is gone — drop the tail and let the reader see EOF.
-                queue.clear()
-                queue.offer(null)
-            }
-        }
-
-        /** Signal EOF to the reader; safe to call once generation finished. */
-        fun finish() {
-            offerTail(null)
-        }
-
-        /** Abort: unblock the reader and make subsequent [offer]s fail immediately. */
-        fun abort() {
-            closed = true
-            queue.clear()
-            queue.offer(null)
-        }
-
-        override fun read(): Int {
-            while (true) {
-                val chunk = current
-                if (chunk != null) {
-                    if (offset < chunk.size) return chunk[offset++].toInt() and 0xFF
-                    current = null
-                    offset = 0
-                }
-                if (eof) return -1
-                val next = queue.take()
-                if (next == null) {
-                    eof = true
-                    return -1
-                }
-                current = next
-                offset = 0
-            }
-        }
-
-        override fun close() {
-            // NanoHTTPD closes the body stream when the socket dies; unblock producers.
-            abort()
-        }
-
-        private companion object {
-            const val TAIL_TIMEOUT_MS = 5_000L
-        }
-    }
-
-    /** Thread-per-connection HTTP workers (idle threads are reaped); generation is serialized separately. */
+    /** Bounded HTTP worker pool with a queue; generation itself is serialized by [generationMutex]. */
     private class AsyncRunner : NanoHTTPD.AsyncRunner {
-        private val executor = Executors.newCachedThreadPool { r ->
+        private val executor = ThreadPoolExecutor(
+            HTTP_CORE_THREADS,
+            HTTP_MAX_THREADS,
+            THREAD_KEEP_ALIVE_SECONDS,
+            TimeUnit.SECONDS,
+            LinkedBlockingQueue(),
+        ) { r ->
             Thread(r, "edgedroid-server-http").apply { isDaemon = true }
         }
 
@@ -340,12 +275,127 @@ class EdgeDroidOpenAiServer(
         private const val TAG = "EdgeDroid.OpenAiServer"
         private const val DEFAULT_PORT = 8080
         private const val FALLBACK_MODEL_ID = "edgedroid-local"
+
+        /** Actual byte budget of one stream pipe (not element count). */
         private const val STREAM_BUFFER_BYTES = 64 * 1024
 
         /** How long a full stream pipe (client not reading) waits before the stream is aborted. */
         private const val STREAM_WRITE_TIMEOUT_MS = 30_000L
 
+        private const val HTTP_CORE_THREADS = 4
+        private const val HTTP_MAX_THREADS = 32
+        private const val THREAD_KEEP_ALIVE_SECONDS = 60L
+
         /** Stable id reused across all chunks of one streaming completion. */
         private val STREAM_ID = "chatcmpl-local"
+    }
+}
+
+/**
+ * Bounded (in **bytes**), timeout-guarded byte pipe that backs an SSE response. The generation
+ * coroutine [offer]s chunk-sized writes; NanoHTTPD's response sender [read]s them.
+ *
+ * Capacity is enforced with a [Semaphore] holding [capacityBytes] permits — acquired per byte
+ * on write, released per byte once a chunk is fully read — so a paused client fills the budget
+ * quickly and a subsequent [offer] fails after [writeTimeoutMs], aborting the generation and
+ * releasing the generation mutex instead of wedging every endpoint.
+ *
+ * [abort] (server stop or socket death) releases all permits and signals EOF, so a producer
+ * blocked in [offer] wakes immediately, observes the closed flag, and returns false; the
+ * underlying queue is unbounded, so the EOF marker can never block behind producers.
+ */
+internal class StreamPipe(
+    private val capacityBytes: Int,
+    private val writeTimeoutMs: Long,
+) : InputStream() {
+
+    private val queue = LinkedBlockingQueue<ByteArray>()
+
+    /** EOF sentinel — LinkedBlockingQueue forbids null elements, and SSE chunks are never empty. */
+    private val EOF = ByteArray(0)
+
+    private val permits = Semaphore(capacityBytes, true)
+    @Volatile private var closed = false
+    private var current: ByteArray? = null
+    private var offset = 0
+    private var eof = false
+
+    /**
+     * Enqueue [data], blocking up to [writeTimeoutMs] for byte budget. Returns false when the
+     * pipe stayed full (client not reading) past the timeout or was aborted.
+     */
+    fun offer(data: ByteArray): Boolean {
+        if (closed) return false
+        if (!permits.tryAcquire(data.size, writeTimeoutMs, TimeUnit.MILLISECONDS)) return false
+        if (closed) {
+            permits.release(data.size)
+            return false
+        }
+        queue.offer(data)
+        return true
+    }
+
+    /** Best-effort write for tail/error events; never blocks the producer forever. */
+    fun offerTail(data: ByteArray?) {
+        if (closed) return
+        if (data == null) {
+            // EOF marker; the queue itself is unbounded so this never blocks.
+            queue.offer(EOF)
+            return
+        }
+        if (!permits.tryAcquire(data.size, TAIL_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            // Client is gone — drop the tail and let the reader see EOF.
+            queue.offer(EOF)
+            return
+        }
+        if (closed) {
+            permits.release(data.size)
+            queue.offer(EOF)
+            return
+        }
+        queue.offer(data)
+    }
+
+    /** Signal EOF to the reader; safe to call once generation finished. */
+    fun finish() {
+        offerTail(null)
+    }
+
+    /** Abort: unblock producers (release all byte budget) and signal EOF to the reader. */
+    fun abort() {
+        closed = true
+        permits.release(capacityBytes)
+        queue.offer(EOF)
+    }
+
+    override fun read(): Int {
+        while (true) {
+            val chunk = current
+            if (chunk != null) {
+                if (offset < chunk.size) return chunk[offset++].toInt() and 0xFF
+                current = null
+                offset = 0
+            }
+            if (eof) return -1
+            val next = queue.take()
+            if (next === EOF) {
+                eof = true
+                return -1
+            }
+            // A chunk's byte budget is freed as soon as the reader starts consuming it, so the
+            // bound is on *queued* bytes; at most one in-flight chunk (~an SSE event) is extra.
+            permits.release(next.size)
+            current = next
+            offset = 0
+        }
+    }
+
+    override fun close() {
+        // NanoHTTPD closes the body stream when the socket dies; unblock producers.
+        abort()
+    }
+
+    private companion object {
+        const val TAIL_TIMEOUT_MS = 5_000L
     }
 }
